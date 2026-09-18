@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usershield"
+version = "0.1.0"
+description = "Offline-First Zero-Trust Cryptographic Pre-Flight Firewall for Local AI Weights & Context Payloads"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Zenith Research Division", email = "research@zenith.internal" }
+]
+keywords = ["ai-safety", "llama-cpp", "gguf", "cryptography", "zero-trust", "attestation", "offline"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+usershield = "usershield.cli:main"
+usershield-run = "usershield.cli:run_cli"
+usershield-sign = "usershield.cli:sign_cli"
+usershield-verify = "usershield.cli:verify_cli"
+usershield-lic = "usershield.cli:license_cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["usershield*"]
