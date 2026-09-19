@@ -6,6 +6,7 @@ from usershield.core.crypto import (
 )
 from usershield.core.trust_store import TrustStore
 from usershield.core.validator import PreFlightValidator
+from usershield.core.context_shield import ContextShield, ContextAuditResult
 
 __all__ = [
     "UserShieldSigner",
@@ -14,4 +15,7 @@ __all__ = [
     "generate_keypair",
     "TrustStore",
     "PreFlightValidator",
+    "ContextShield",
+    "ContextAuditResult",
 ]
+
