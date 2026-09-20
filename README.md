@@ -15,10 +15,11 @@ UserShield intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtim
 
 ## Key Invariants
 
-1. **Pre-Memory Quarantine**: Runs mathematically strictly before `llama.cpp` allocates tensors. If verification fails, pointers are never created and execution halts instantly.
-2. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
-3. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
-4. **Air-Gapped Machine-Bound Licensing**: Prosumer ($0.99 one-time) licenses bind cryptographically to irreversible local hardware identifiers without leaking machine metrics.
+1. **Pre-Memory Quarantine**: Runs mathematically strictly before `llama.cpp` or Ollama allocates tensors. If verification fails, pointers are never created and execution halts instantly.
+2. **Anti-TOCTOU File Locking**: Acquires mandatory OS-level shared locks (`fcntl`) before reading metadata to prevent race conditions where malicious processes swap files post-verification.
+3. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
+4. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
+5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache cryptographically bound to your hardware fingerprint via HMAC, reducing 30-second verification times to <50ms.
 
 ---
 
@@ -84,6 +85,19 @@ usershield verify models/qwen2.5-7b-instruct-q4_k_m.gguf --trust-store ./keys
 usershield run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f prompt.txt --ctx-size 4096
 ```
 If any input file lacks a valid `.sig` or has been tampered with by even a single bit, UserShield terminates the process with a critical Deen-styled lockdown banner before `llama-cli` starts.
+
+### 5. Start the Zero-Trust Reverse Proxy (Pro Tier)
+To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the UserShield Interceptor on the default Ollama port:
+```bash
+usershield proxy --port 11434 --upstream-port 11435
+```
+UserShield transparently parses incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
+
+### 6. Manage the Instant Attestation Cache
+UserShield Pro maintains a hardware-bound SQLite cache to make warm loads instantaneous (<50ms). To manually purge it:
+```bash
+usershield cache clear
+```
 
 ---
 

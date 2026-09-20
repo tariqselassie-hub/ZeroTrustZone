@@ -149,9 +149,15 @@ def cmd_service(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="usershield",
-        description="UserShield: Offline-First Zero-Trust Cryptographic Firewall for Local AI",
+        description=(
+            "🛡️ UserShield: Zero-Trust Cryptographic Pre-Flight Firewall\n\n"
+            "Secures local AI inference by enforcing strict asymmetric cryptographic\n"
+            "attestation on model weights and contexts before memory allocation."
+        ),
+        epilog="Run 'usershield <command> --help' for detailed usage instructions.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    subparsers = parser.add_subparsers(dest="command", help="Sub-commands")
+    subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # Run subparser
     run_p = subparsers.add_parser("run", help="Run llama-cli / llama.cpp with pre-flight protection")
