@@ -17,16 +17,24 @@ class AttestationCache:
         self.db_path = db_path
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
+        self._set_pragmas()
         self._init_db()
         self.machine_key = HardwareFingerprint.compute_fingerprint().encode('utf-8')
 
+    def _set_pragmas(self):
+        self.conn.execute("PRAGMA journal_mode = WAL;")
+        self.conn.execute("PRAGMA synchronous = NORMAL;")
+        self.conn.execute("PRAGMA busy_timeout = 5000;")
+
     def _init_db(self):
+        # Drop the table if upgrading from floating-point mtime to ns
+        self.conn.execute("DROP TABLE IF EXISTS attestation_cache")
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS attestation_cache (
                 file_path TEXT PRIMARY KEY,
                 inode INTEGER,
                 size INTEGER,
-                mtime REAL,
+                mtime_ns INTEGER,
                 auth_key TEXT,
                 algo TEXT,
                 signature TEXT
@@ -34,8 +42,8 @@ class AttestationCache:
         ''')
         self.conn.commit()
 
-    def _sign_row(self, file_path, inode, size, mtime, auth_key, algo) -> str:
-        payload = f"{file_path}:{inode}:{size}:{mtime}:{auth_key}:{algo}".encode('utf-8')
+    def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo) -> str:
+        payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}".encode('utf-8')
         return hmac.new(self.machine_key, payload, hashlib.sha256).hexdigest()
 
     def get_cached_attestation(self, file_path: str):
@@ -43,21 +51,24 @@ class AttestationCache:
             return None
             
         stat = os.stat(file_path)
-        inode, size, mtime = stat.st_ino, stat.st_size, stat.st_mtime
+        inode, size, mtime_ns = stat.st_ino, stat.st_size, stat.st_mtime_ns
         
-        cur = self.conn.execute('SELECT inode, size, mtime, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (file_path,))
+        if inode == 0:
+            return None # Unstable inode on Windows/NAS, reject cache
+            
+        cur = self.conn.execute('SELECT inode, size, mtime_ns, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (file_path,))
         row = cur.fetchone()
         if not row:
             return None
             
-        c_inode, c_size, c_mtime, c_auth_key, c_algo, c_signature = row
+        c_inode, c_size, c_mtime_ns, c_auth_key, c_algo, c_signature = row
         
         # Verify filesystem metadata hasn't changed
-        if c_inode != inode or c_size != size or c_mtime != mtime:
+        if c_inode != inode or c_size != size or c_mtime_ns != mtime_ns:
             return None
             
         # Verify the cryptographic signature of the cache row (Machine Binding + Anti-Tamper)
-        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime, c_auth_key, c_algo)
+        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo)
         if not hmac.compare_digest(c_signature, expected_sig):
             return None # Tampered cache row
             
@@ -72,13 +83,17 @@ class AttestationCache:
         if not os.path.exists(file_path):
             return
         stat = os.stat(file_path)
-        inode, size, mtime = stat.st_ino, stat.st_size, stat.st_mtime
-        signature = self._sign_row(file_path, inode, size, mtime, auth_key, algo)
+        inode, size, mtime_ns = stat.st_ino, stat.st_size, stat.st_mtime_ns
+        
+        if inode == 0:
+            return # Don't cache unstable inodes
+            
+        signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo)
         
         self.conn.execute('''
-            INSERT OR REPLACE INTO attestation_cache (file_path, inode, size, mtime, auth_key, algo, signature)
+            INSERT OR REPLACE INTO attestation_cache (file_path, inode, size, mtime_ns, auth_key, algo, signature)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (file_path, inode, size, mtime, auth_key, algo, signature))
+        ''', (file_path, inode, size, mtime_ns, auth_key, algo, signature))
         self.conn.commit()
         
     def clear(self):

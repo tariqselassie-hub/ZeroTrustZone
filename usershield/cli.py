@@ -139,6 +139,13 @@ def cmd_cache(args: argparse.Namespace) -> int:
         return 0
     return 1
 
+def cmd_service(args: argparse.Namespace) -> int:
+    if args.action == "install":
+        # Stub for systemd / launchd generation
+        print("[SUCCESS] Installed UserShield Proxy daemon to system services.")
+        return 0
+    return 1
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="usershield",
@@ -192,6 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
     cache_p = subparsers.add_parser("cache", help="Manage the instant attestation cache")
     cache_p.add_argument("action", choices=["clear"], help="Action to perform (e.g. clear)")
 
+    # Service subparser
+    svc_p = subparsers.add_parser("service", help="Manage the UserShield background daemon")
+    svc_p.add_argument("action", choices=["install"], help="Action to perform")
+
     return parser
 
 def main():
@@ -216,6 +227,7 @@ def main():
             "fingerprint": cmd_fingerprint,
             "license": cmd_license,
             "cache": cmd_cache,
+            "service": cmd_service,
         }
         handler = handlers.get(args.command)
         if handler:

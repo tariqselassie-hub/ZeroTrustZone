@@ -22,7 +22,7 @@ class InferenceProxy:
         self.model_base_dir = os.path.expanduser("~/.ollama/models")
         
         # In-memory LRU cache to completely bypass SQLite latency on sub-millisecond hot loops
-        # Maps absolute_path -> {"inode": x, "size": y, "mtime": z, "status": "VERIFIED"}
+        # Maps absolute_path -> {"inode": x, "size": y, "mtime_ns": z, "status": "VERIFIED"}
         self._memory_cache = {}
         
     async def _proxy_request(self, request: web.Request) -> web.StreamResponse:
@@ -116,7 +116,7 @@ class InferenceProxy:
             return False
             
         stat = os.stat(model_path)
-        if stat.st_ino == cached["inode"] and stat.st_size == cached["size"] and stat.st_mtime == cached["mtime"]:
+        if stat.st_ino == cached["inode"] and stat.st_size == cached["size"] and stat.st_mtime_ns == cached["mtime_ns"]:
             return True
             
         # Invalidate if metadata drift
@@ -130,7 +130,7 @@ class InferenceProxy:
         self._memory_cache[model_path] = {
             "inode": stat.st_ino,
             "size": stat.st_size,
-            "mtime": stat.st_mtime,
+            "mtime_ns": stat.st_mtime_ns,
             "status": "VERIFIED"
         }
 
