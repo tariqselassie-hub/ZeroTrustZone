@@ -28,6 +28,7 @@ from usershield.core.validator import PreFlightValidator
 from usershield.lic.fingerprint import HardwareFingerprint
 from usershield.lic.manager import LicenseManager
 from usershield.runners.llama_cpp import run_llama_protected
+from usershield.runners.proxy import run_proxy
 from usershield.ui.banners import (
     print_header,
     print_audit_table,
@@ -49,6 +50,21 @@ def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
         trust_store=trust_store,
         operating_mode=operating_mode,
     )
+
+def cmd_proxy(args: argparse.Namespace) -> int:
+    try:
+        run_proxy(
+            host=args.host,
+            port=args.port,
+            upstream_port=args.upstream_port,
+            trust_store_path=args.trust_store
+        )
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    except Exception as e:
+        print(f"[ERROR] Proxy failed: {e}", file=sys.stderr)
+        return 1
 
 def cmd_sign(args: argparse.Namespace) -> int:
     try:
@@ -125,6 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--trust-store", default="./keys", help="Directory containing trusted public keys")
     run_p.add_argument("--license", default=None, help="Path to custom usershield.lic file")
 
+    # Proxy subparser
+    proxy_p = subparsers.add_parser("proxy", help="Start the Ollama/LM Studio reverse proxy interceptor")
+    proxy_p.add_argument("--host", default="127.0.0.1", help="Host to bind proxy")
+    proxy_p.add_argument("--port", type=int, default=11434, help="Port to listen on (default 11434)")
+    proxy_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend")
+    proxy_p.add_argument("--trust-store", default="./keys", help="Directory containing trusted public keys")
+
     # Sign subparser
     sign_p = subparsers.add_parser("sign", help="Sign a model weight or context payload")
     sign_p.add_argument("target", help="File to sign (e.g. model.gguf, context.txt)")
@@ -168,6 +191,7 @@ def main():
             sys.exit(0)
             
         handlers = {
+            "proxy": cmd_proxy,
             "sign": cmd_sign,
             "verify": cmd_verify,
             "keygen": cmd_keygen,

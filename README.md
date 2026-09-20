@@ -89,14 +89,15 @@ If any input file lacks a valid `.sig` or has been tampered with by even a singl
 
 ## Dual-Tier & Licensing Model
 
-| Feature | Community (FOSS) | Prosumer ($0.99 One-Time) | Enterprise |
+| Feature | Community (FOSS) | Pro / Power User ($19-$29) | Enterprise ($15-$30/mo/seat) |
 | :--- | :--- | :--- | :--- |
-| **Inference Gate** | `llama.cpp` wrapper | `llama.cpp` wrapper | gRPC / Local Socket API |
-| **Key Management** | Local folder drops | Automated signed patches | Centralized IAM / KMS |
-| **Hardware Binding** | N/A | Offline Hardware Fingerprint | Multi-Seat Air-Gapped Tokens |
-| **Network Mode** | 100% Offline | 100% Offline | Air-Gapped / Enclave Support |
+| **Inference Gate** | `llama.cpp` CLI wrapper | **Ollama / LM Studio API Proxy** | gRPC / Remote Sockets |
+| **Verification** | Full SHA-256 stream | **Instant Merkle / Inode Cache** | Cosign / Sigstore Integration |
+| **Key Management** | Local folder drops | HF Auto-Sign & Fetch | Centralized IAM / KMS |
+| **Monitoring** | Manual Execution | Background Model Daemon | Central SIEM Audit Logging |
+| **Developer SDK** | None | Python `@usershield.guard` | CI/CD Build Pipelines |
 
-To view your local machine's anonymous hardware fingerprint:
+To view your local machine's anonymous hardware fingerprint (for Pro licensing):
 ```bash
 usershield fingerprint
 ```
