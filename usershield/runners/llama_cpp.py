@@ -8,7 +8,7 @@ import os
 import sys
 import shutil
 import subprocess
-from typing import List
+from typing import List, Any
 from usershield.core.trust_store import TrustStore
 from usershield.core.validator import PreFlightValidator
 from usershield.ui.banners import (
