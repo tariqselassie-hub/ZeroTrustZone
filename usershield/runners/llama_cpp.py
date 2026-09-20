@@ -42,6 +42,7 @@ def run_llama_protected(
     passthrough_args: List[str],
     trust_store: TrustStore,
     operating_mode: str = "COMMUNITY",
+    use_cache: bool = True,
 ) -> int:
     """
     Executes llama.cpp within the UserShield pre-flight quarantine boundary.
@@ -56,7 +57,7 @@ def run_llama_protected(
         cmd = [llama_bin] + passthrough_args
         return subprocess.run(cmd).returncode
 
-    validator = PreFlightValidator(trust_store)
+    validator = PreFlightValidator(trust_store, use_cache=use_cache)
     all_clean, rows, elapsed = validator.audit_batch(targets)
 
     # Print the Deen structured Unicode audit table

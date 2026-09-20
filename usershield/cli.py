@@ -49,6 +49,7 @@ def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
         passthrough_args=passthrough,
         trust_store=trust_store,
         operating_mode=operating_mode,
+        use_cache=not args.no_cache,
     )
 
 def cmd_proxy(args: argparse.Namespace) -> int:
@@ -57,7 +58,8 @@ def cmd_proxy(args: argparse.Namespace) -> int:
             host=args.host,
             port=args.port,
             upstream_port=args.upstream_port,
-            trust_store_path=args.trust_store
+            trust_store_path=args.trust_store,
+            use_cache=not args.no_cache,
         )
         return 0
     except KeyboardInterrupt:
@@ -78,7 +80,7 @@ def cmd_sign(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     trust_store = TrustStore([args.trust_store] if args.trust_store else None)
-    validator = PreFlightValidator(trust_store)
+    validator = PreFlightValidator(trust_store, use_cache=not args.no_cache)
     
     row = validator.validate_file(args.target, sig_path=args.sig)
     print_audit_table([row])
@@ -128,6 +130,15 @@ def cmd_license(args: argparse.Namespace) -> int:
                 print(f"  {k:<15}: {v}")
     return 0 if is_valid else 1
 
+def cmd_cache(args: argparse.Namespace) -> int:
+    if args.action == "clear":
+        from usershield.core.cache import AttestationCache
+        cache = AttestationCache()
+        cache.clear()
+        print("[SUCCESS] Instant Attestation Cache cleared.")
+        return 0
+    return 1
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="usershield",
@@ -140,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--llama-bin", default="./llama-cli", help="Path to llama-cli / llama.cpp binary")
     run_p.add_argument("--trust-store", default="./keys", help="Directory containing trusted public keys")
     run_p.add_argument("--license", default=None, help="Path to custom usershield.lic file")
+    run_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
 
     # Proxy subparser
     proxy_p = subparsers.add_parser("proxy", help="Start the Ollama/LM Studio reverse proxy interceptor")
@@ -147,6 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     proxy_p.add_argument("--port", type=int, default=11434, help="Port to listen on (default 11434)")
     proxy_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend")
     proxy_p.add_argument("--trust-store", default="./keys", help="Directory containing trusted public keys")
+    proxy_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
 
     # Sign subparser
     sign_p = subparsers.add_parser("sign", help="Sign a model weight or context payload")
@@ -159,6 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     ver_p.add_argument("target", help="File to verify")
     ver_p.add_argument("--sig", default=None, help="Detached .sig path (defaults to <target>.sig)")
     ver_p.add_argument("--trust-store", default="./keys", help="Directory containing trusted public keys")
+    ver_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
 
     # Keygen subparser
     kg_p = subparsers.add_parser("keygen", help="Generate asymmetric signing keypair")
@@ -173,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     # License subparser
     lic_p = subparsers.add_parser("license", help="Verify offline license status")
     lic_p.add_argument("--license", default=None, help="Path to usershield.lic file")
+
+    # Cache subparser
+    cache_p = subparsers.add_parser("cache", help="Manage the instant attestation cache")
+    cache_p.add_argument("action", choices=["clear"], help="Action to perform (e.g. clear)")
 
     return parser
 
@@ -197,6 +215,7 @@ def main():
             "keygen": cmd_keygen,
             "fingerprint": cmd_fingerprint,
             "license": cmd_license,
+            "cache": cmd_cache,
         }
         handler = handlers.get(args.command)
         if handler:

@@ -8,10 +8,13 @@ import time
 from typing import List, Dict, Any, Tuple
 from usershield.core.trust_store import TrustStore
 from usershield.core.crypto import UserShieldVerifier
+from usershield.core.cache import AttestationCache
 
 class PreFlightValidator:
-    def __init__(self, trust_store: TrustStore):
+    def __init__(self, trust_store: TrustStore, use_cache: bool = True):
         self.trust_store = trust_store
+        self.use_cache = use_cache
+        self.cache = AttestationCache() if use_cache else None
 
     def validate_file(self, target_path: str, sig_path: str = None) -> Dict[str, Any]:
         """
@@ -46,6 +49,15 @@ class PreFlightValidator:
             result["error"] = "Trust store contains zero public authority keys"
             return result
 
+        if self.use_cache:
+            cached = self.cache.get_cached_attestation(target_path)
+            if cached:
+                result["key"] = cached["key"]
+                result["algo"] = cached["algo"]
+                result["status"] = cached["status"]
+                result["error"] = cached["error"]
+                return result
+
         # Try all trusted authorities
         for auth in authorities:
             is_valid, algo_or_err = UserShieldVerifier.verify_file(
@@ -54,6 +66,8 @@ class PreFlightValidator:
                 auth["key"],
             )
             if is_valid:
+                if self.use_cache:
+                    self.cache.store_attestation(target_path, auth["name"], algo_or_err)
                 result["key"] = auth["name"]
                 result["algo"] = algo_or_err
                 result["status"] = "VERIFIED"
