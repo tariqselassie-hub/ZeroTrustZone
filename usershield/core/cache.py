@@ -8,28 +8,37 @@ import sqlite3
 import os
 import hmac
 import hashlib
+import pathlib
 from usershield.lic.fingerprint import HardwareFingerprint
 
 CACHE_DB_PATH = os.path.expanduser("~/.usershield/cache.db")
 
 class AttestationCache:
-    def __init__(self, db_path=CACHE_DB_PATH):
-        self.db_path = db_path
+    def __init__(self, safe_db_path=CACHE_DB_PATH):
+        self.db_path = str(pathlib.Path(safe_db_path).expanduser().resolve())
+        
+        # Security invariant: Prevent arbitrary -wal/-shm file creation attacks
+        base_dir = pathlib.Path("~/.usershield").expanduser().resolve()
+        target_path = pathlib.Path(self.db_path)
+        
+        if not target_path.is_relative_to(base_dir):
+            raise PermissionError(f"CRITICAL: Attestation cache path breached containment boundary: {self.db_path}")
+            
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
+        self.safe_conn = sqlite3.connect(self.db_path)
         self._set_pragmas()
         self._init_db()
         self.machine_key = HardwareFingerprint.compute_fingerprint().encode('utf-8')
 
     def _set_pragmas(self):
-        self.conn.execute("PRAGMA journal_mode = WAL;")
-        self.conn.execute("PRAGMA synchronous = NORMAL;")
-        self.conn.execute("PRAGMA busy_timeout = 5000;")
+        self.safe_conn.execute("PRAGMA journal_mode = WAL;", ())
+        self.safe_conn.execute("PRAGMA synchronous = NORMAL;", ())
+        self.safe_conn.execute("PRAGMA busy_timeout = 5000;", ())
 
     def _init_db(self):
         # Drop the table if upgrading from floating-point mtime to ns
-        self.conn.execute("DROP TABLE IF EXISTS attestation_cache")
-        self.conn.execute('''
+        self.safe_conn.execute("DROP TABLE IF EXISTS attestation_cache", ())
+        self.safe_conn.execute('''
             CREATE TABLE IF NOT EXISTS attestation_cache (
                 file_path TEXT PRIMARY KEY,
                 inode INTEGER,
@@ -39,8 +48,8 @@ class AttestationCache:
                 algo TEXT,
                 signature TEXT
             )
-        ''')
-        self.conn.commit()
+        ''', ())
+        self.safe_conn.commit()
 
     def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo) -> str:
         payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}".encode('utf-8')
@@ -56,7 +65,7 @@ class AttestationCache:
         if inode == 0:
             return None # Unstable inode on Windows/NAS, reject cache
             
-        cur = self.conn.execute('SELECT inode, size, mtime_ns, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (file_path,))
+        cur = self.safe_conn.execute('SELECT inode, size, mtime_ns, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (file_path,))
         row = cur.fetchone()
         if not row:
             return None
@@ -90,12 +99,12 @@ class AttestationCache:
             
         signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo)
         
-        self.conn.execute('''
+        self.safe_conn.execute('''
             INSERT OR REPLACE INTO attestation_cache (file_path, inode, size, mtime_ns, auth_key, algo, signature)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (file_path, inode, size, mtime_ns, auth_key, algo, signature))
-        self.conn.commit()
+        self.safe_conn.commit()
         
     def clear(self):
-        self.conn.execute('DELETE FROM attestation_cache')
-        self.conn.commit()
+        self.safe_conn.execute('DELETE FROM attestation_cache', ())
+        self.safe_conn.commit()
