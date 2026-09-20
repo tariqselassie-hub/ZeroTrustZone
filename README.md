@@ -1,12 +1,12 @@
-# UserShield 🛡️
+# ZTZ 🛡️
 
 **Offline-First Zero-Trust Cryptographic Pre-Flight Firewall for Local AI Runtimes**
 
-UserShield intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtimes) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, UserShield ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
+ZTZ intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtimes) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, ZTZ ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
 
 ```text
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                       USERSHIELD — PRE-FLIGHT GATEWAY                        ║
+║                       ZTZ — PRE-FLIGHT GATEWAY                        ║
 ║                  Zero-Trust Hardware Attestation Sentinel                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -30,7 +30,7 @@ UserShield intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtim
                                                             │
                                                             ▼
                                                ┌─────────────────────────┐
-                                               │   UserShield Pre-Flight │
+                                               │   ZTZ Pre-Flight │
                                                │  (Zero RAM/Tensor Alloc)│
                                                └────────────┬────────────┘
                                                             │
@@ -80,21 +80,21 @@ Generates detached signature: `models/qwen2.5-7b-instruct-q4_k_m.gguf.sig`.
 usershield verify models/qwen2.5-7b-instruct-q4_k_m.gguf --trust-store ./keys
 ```
 
-### 4. Run `llama.cpp` under UserShield Protection
+### 4. Run `llama.cpp` under ZTZ Protection
 ```bash
 usershield run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f prompt.txt --ctx-size 4096
 ```
-If any input file lacks a valid `.sig` or has been tampered with by even a single bit, UserShield terminates the process with a critical Deen-styled lockdown banner before `llama-cli` starts.
+If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical Deen-styled lockdown banner before `llama-cli` starts.
 
 ### 5. Start the Zero-Trust Reverse Proxy (Pro Tier)
-To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the UserShield Interceptor on the default Ollama port:
+To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:
 ```bash
 usershield proxy --port 11434 --upstream-port 11435
 ```
-UserShield transparently parses incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
+ZTZ transparently parses incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
 
 ### 6. Manage the Instant Attestation Cache
-UserShield Pro maintains a hardware-bound SQLite cache to make warm loads instantaneous (<50ms). To manually purge it:
+ZTZ Pro maintains a hardware-bound SQLite cache to make warm loads instantaneous (<50ms). To manually purge it:
 ```bash
 usershield cache clear
 ```
@@ -119,4 +119,4 @@ usershield fingerprint
 ---
 
 ## License
-UserShield Core is licensed under the Apache License, Version 2.0.
+ZTZ Core is licensed under the Apache License, Version 2.0.

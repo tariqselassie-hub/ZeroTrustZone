@@ -1,10 +1,10 @@
 import os
 import tempfile
 import unittest
-from usershield.core.crypto import (
+from ztz.core.crypto import (
     generate_keypair,
-    UserShieldSigner,
-    UserShieldVerifier,
+    ZTZSigner,
+    ZTZVerifier,
     compute_file_sha256,
 )
 from cryptography.hazmat.primitives import serialization
@@ -30,7 +30,7 @@ class TestCrypto(unittest.TestCase):
             f.write(b"GGUF_MAGIC_HEADER" + b"\x00" * 4096)
 
         # Sign
-        signer = UserShieldSigner(priv_path)
+        signer = ZTZSigner(priv_path)
         sig_path = signer.sign_file(dummy_model)
         self.assertTrue(os.path.exists(sig_path))
 
@@ -39,7 +39,7 @@ class TestCrypto(unittest.TestCase):
             pub_key = serialization.load_pem_public_key(pf.read())
 
         # Verify clean file
-        is_valid, algo = UserShieldVerifier.verify_file(dummy_model, sig_path, pub_key)
+        is_valid, algo = ZTZVerifier.verify_file(dummy_model, sig_path, pub_key)
         self.assertTrue(is_valid)
         self.assertEqual(algo, "Ed25519")
 
@@ -49,7 +49,7 @@ class TestCrypto(unittest.TestCase):
             f.write(b"\xFF")
 
         # Verify tampered file -> must fail
-        is_valid_tampered, _ = UserShieldVerifier.verify_file(dummy_model, sig_path, pub_key)
+        is_valid_tampered, _ = ZTZVerifier.verify_file(dummy_model, sig_path, pub_key)
         self.assertFalse(is_valid_tampered)
 
     def test_rsa_sign_and_verify(self):
@@ -64,13 +64,13 @@ class TestCrypto(unittest.TestCase):
         with open(dummy_file, "wb") as f:
             f.write(b"You are an offline assistant.")
 
-        signer = UserShieldSigner(priv_path)
+        signer = ZTZSigner(priv_path)
         sig_path = signer.sign_file(dummy_file)
 
         with open(pub_path, "rb") as pf:
             pub_key = serialization.load_pem_public_key(pf.read())
 
-        is_valid, algo = UserShieldVerifier.verify_file(dummy_file, sig_path, pub_key)
+        is_valid, algo = ZTZVerifier.verify_file(dummy_file, sig_path, pub_key)
         self.assertTrue(is_valid)
         self.assertEqual(algo, "RSA-PSS")
 

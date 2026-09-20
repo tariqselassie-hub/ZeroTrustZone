@@ -1,3 +1,3 @@
 """
-Test suite for UserShield.
+Test suite for ZTZ.
 """
