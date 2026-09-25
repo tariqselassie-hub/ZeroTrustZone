@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Tuple
 from ztz.core.trust_store import TrustStore
 from ztz.core.crypto import ZTZVerifier
 from ztz.core.cache import AttestationCache
+from ztz.core.model_inspector import ModelFormatInspector
 
 class PreFlightValidator:
     def __init__(self, trust_store: TrustStore, use_cache: bool = True):
@@ -31,11 +32,20 @@ class PreFlightValidator:
             "algo": "None",
             "status": "UNATTESTED",
             "error": None,
+            "format": "UNKNOWN",
         }
 
         if not os.path.exists(target_path):
             result["status"] = "MISSING"
             result["error"] = "Target file not found"
+            return result
+
+        # Pre-Flight Container & Format Safety Check
+        format_report = ModelFormatInspector.inspect(target_path)
+        result["format"] = format_report.format
+        if format_report.risk_level == "CRITICAL" and not format_report.is_safe_format:
+            result["status"] = "UNSAFE_FORMAT"
+            result["error"] = "; ".join(format_report.warnings)
             return result
 
         if not os.path.exists(sig_path):
@@ -95,7 +105,7 @@ class PreFlightValidator:
                 continue
             row = self.validate_file(target)
             rows.append(row)
-            if row["status"] != "VERIFIED":
+            if row["status"] not in ("VERIFIED", "VERIFIED_CACHE"):
                 all_clean = False
 
         elapsed = time.perf_counter() - t0

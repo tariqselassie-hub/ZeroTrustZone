@@ -159,3 +159,8 @@ def generate_keypair(
         f.write(pub_bytes)
 
     return priv_path, pub_path
+
+
+# Backward-compatible and sovereign aliases for UserShield ecosystem
+UserShieldSigner = ZTZSigner
+UserShieldVerifier = ZTZVerifier

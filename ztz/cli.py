@@ -85,8 +85,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     row = validator.validate_file(args.target, sig_path=args.sig)
     print_audit_table([row])
 
-    if row["status"] == "VERIFIED":
-        print(f"[PASS] File attested by authority: {row['key']} ({row['algo']})")
+    if row["status"] in ("VERIFIED", "VERIFIED_CACHE"):
+        cache_note = " [from instant cache]" if row["status"] == "VERIFIED_CACHE" else ""
+        print(f"[PASS] File attested by authority: {row['key']} ({row['algo']}){cache_note}")
         return 0
     else:
         print_lockdown_banner(args.target, reason=f"{row['status']}: {row['error']}")
@@ -209,7 +210,62 @@ def build_parser() -> argparse.ArgumentParser:
     svc_p = subparsers.add_parser("service", help="Manage the ZTZ background daemon")
     svc_p.add_argument("action", choices=["install"], help="Action to perform")
 
+    # Inspect-model subparser
+    inspect_p = subparsers.add_parser("inspect-model", help="Inspect GGUF / Safetensors / PyTorch weights for structural safety & bytecode risks")
+    inspect_p.add_argument("target", help="Model weight file to inspect")
+
+    # Context-scan subparser
+    scan_p = subparsers.add_parser("context-scan", help="Scan prompt or context file for leaked API keys, tokens, or private keys")
+    scan_p.add_argument("target", help="Text or file path to scan")
+    scan_p.add_argument("--out", default=None, help="Optional output path for scrubbed/sanitized text")
+
     return parser
+
+def cmd_inspect_model(args: argparse.Namespace) -> int:
+    from ztz.core.model_inspector import ModelFormatInspector
+    print_header(title="USERSHIELD — MODEL WEIGHT INSPECTOR", subtitle="Container & Bytecode Security Probe")
+    rep = ModelFormatInspector.inspect(args.target)
+    print(f"Target File     : {rep.file_path}")
+    print(f"Format          : {rep.format}")
+    print(f"Size            : {rep.file_size_bytes} bytes")
+    print(f"Safety Verdict  : {'SAFE CONTAINER' if rep.is_safe_format else 'RISKY CONTAINER'}")
+    print(f"Risk Level      : {rep.risk_level}")
+    if rep.metadata:
+        print("Metadata        :")
+        for k, v in rep.metadata.items():
+            print(f"  - {k:<20}: {v}")
+    if rep.warnings:
+        print("Warnings        :")
+        for w in rep.warnings:
+            print(f"  ⚠ {w}")
+    return 0 if rep.is_safe_format else 1
+
+def cmd_context_scan(args: argparse.Namespace) -> int:
+    from ztz.core.context_shield import ContextShield
+    print_header(title="USERSHIELD — CONTEXT FIREWALL SCAN", subtitle="Secret Scrubbing & Pre-Flight Token Sanitizer")
+    if os.path.exists(args.target):
+        with open(args.target, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    else:
+        content = args.target
+
+    res = ContextShield.sanitize(content)
+    print(f"Total Redactions : {res.redactions_count}")
+    print(f"Payload Digest   : {res.digest_sha256}")
+    if res.findings:
+        print("Detected Secrets :")
+        for f in res.findings:
+            cat = f.get('category') or f.get('type') or 'SECRET'
+            offset = f.get('offset', 0)
+            length = f.get('length', 0)
+            print(f"  🚨 [{cat}] Offset: {offset} (length: {length})")
+    else:
+        print("✔ No sensitive secrets or private keys detected in context payload.")
+    if args.out and res.clean_text:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(res.clean_text)
+        print(f"[SUCCESS] Sanitized content written to: {args.out}")
+    return 0
 
 def main():
     parser = build_parser()
@@ -234,6 +290,8 @@ def main():
             "license": cmd_license,
             "cache": cmd_cache,
             "service": cmd_service,
+            "inspect-model": cmd_inspect_model,
+            "context-scan": cmd_context_scan,
         }
         handler = handlers.get(args.command)
         if handler:
@@ -241,6 +299,7 @@ def main():
         else:
             parser.print_help()
             sys.exit(1)
+
 
 def run_cli():
     """Entrypoint for `ztz-run` script."""

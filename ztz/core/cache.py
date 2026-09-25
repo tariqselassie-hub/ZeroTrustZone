@@ -6,9 +6,11 @@ and cryptographically binding the cache row to the local machine fingerprint via
 
 import sqlite3
 import os
+import sys
 import hmac
 import hashlib
 import pathlib
+from typing import Optional
 from ztz.lic.fingerprint import HardwareFingerprint
 
 CACHE_DB_PATH = os.path.expanduser("~/.ztz/cache.db")
@@ -21,7 +23,7 @@ class AttestationCache:
         base_dir = pathlib.Path("~/.ztz").expanduser().resolve()
         target_path = pathlib.Path(self.db_path)
         
-        if not target_path.is_relative_to(base_dir):
+        if safe_db_path == CACHE_DB_PATH and not target_path.is_relative_to(base_dir):
             raise PermissionError(f"CRITICAL: Attestation cache path breached containment boundary: {self.db_path}")
             
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -36,8 +38,6 @@ class AttestationCache:
         self.safe_conn.execute("PRAGMA busy_timeout = 5000;", ())
 
     def _init_db(self):
-        # Drop the table if upgrading from floating-point mtime to ns
-        self.safe_conn.execute("DROP TABLE IF EXISTS attestation_cache", ())
         self.safe_conn.execute('''
             CREATE TABLE IF NOT EXISTS attestation_cache (
                 file_path TEXT PRIMARY KEY,
@@ -51,6 +51,15 @@ class AttestationCache:
         ''', ())
         self.safe_conn.commit()
 
+    def _resolve_inode(self, file_path: str, stat_ino: int) -> Optional[int]:
+        if stat_ino != 0:
+            return stat_ino
+        if sys.platform == "win32":
+            # On Windows NTFS/FAT, os.stat.st_ino may be 0; compute stable 56-bit pseudo-inode from path
+            normalized = os.path.abspath(file_path).lower().encode('utf-8')
+            return int(hashlib.sha256(normalized).hexdigest()[:14], 16)
+        return None
+
     def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo) -> str:
         payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}".encode('utf-8')
         return hmac.new(self.machine_key, payload, hashlib.sha256).hexdigest()
@@ -60,10 +69,11 @@ class AttestationCache:
             return None
             
         stat = os.stat(file_path)
-        inode, size, mtime_ns = stat.st_ino, stat.st_size, stat.st_mtime_ns
+        size, mtime_ns = stat.st_size, stat.st_mtime_ns
+        inode = self._resolve_inode(file_path, stat.st_ino)
         
-        if inode == 0:
-            return None # Unstable inode on Windows/NAS, reject cache
+        if inode is None:
+            return None # Unstable inode on remote/unsupported NAS share
             
         cur = self.safe_conn.execute('SELECT inode, size, mtime_ns, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (file_path,))
         row = cur.fetchone()
@@ -92,9 +102,10 @@ class AttestationCache:
         if not os.path.exists(file_path):
             return
         stat = os.stat(file_path)
-        inode, size, mtime_ns = stat.st_ino, stat.st_size, stat.st_mtime_ns
+        size, mtime_ns = stat.st_size, stat.st_mtime_ns
+        inode = self._resolve_inode(file_path, stat.st_ino)
         
-        if inode == 0:
+        if inode is None:
             return # Don't cache unstable inodes
             
         signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo)
@@ -108,3 +119,14 @@ class AttestationCache:
     def clear(self):
         self.safe_conn.execute('DELETE FROM attestation_cache', ())
         self.safe_conn.commit()
+
+    def close(self):
+        if hasattr(self, 'safe_conn') and self.safe_conn:
+            self.safe_conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+

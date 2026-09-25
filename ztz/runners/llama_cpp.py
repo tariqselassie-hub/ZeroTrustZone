@@ -109,11 +109,11 @@ def run_llama_protected(
         # Print the Deen structured Unicode audit table
         print_audit_table(rows)
 
-        passed_count = sum(1 for r in rows if r["status"] == "VERIFIED")
+        passed_count = sum(1 for r in rows if r["status"] in ("VERIFIED", "VERIFIED_CACHE"))
         failed_count = len(rows) - passed_count
 
         if not all_clean:
-            failed_item = next(r for r in rows if r["status"] != "VERIFIED")
+            failed_item = next(r for r in rows if r["status"] not in ("VERIFIED", "VERIFIED_CACHE"))
             print_lockdown_banner(
                 failed_target=failed_item["full_path"],
                 reason=f"{failed_item['status']}: {failed_item.get('error')}",

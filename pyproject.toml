@@ -41,7 +41,9 @@ ztz-run = "ztz.cli:run_cli"
 ztz-sign = "ztz.cli:sign_cli"
 ztz-verify = "ztz.cli:verify_cli"
 ztz-lic = "ztz.cli:license_cli"
+usershield = "ztz.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ztz*"]
+include = ["ztz*", "usershield*"]
+

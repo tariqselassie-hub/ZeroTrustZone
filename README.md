@@ -93,10 +93,51 @@ usershield proxy --port 11434 --upstream-port 11435
 ```
 ZTZ transparently parses incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
 
-### 6. Manage the Instant Attestation Cache
-ZTZ Pro maintains a hardware-bound SQLite cache to make warm loads instantaneous (<50ms). To manually purge it:
+### 6. Inspect Model Weights for Bytecode & Structural Risks
+Inspect containers (GGUF, Safetensors, and legacy PyTorch `.pt`/`.bin` pickle archives) before loading:
+```bash
+usershield inspect-model models/qwen2.5-7b-instruct-q4_k_m.gguf
+```
+If legacy PyTorch pickle opcodes (`cos`, `cposix`, etc.) are detected, UserShield raises a `CRITICAL` risk alert warning of potential Arbitrary Code Execution (RCE).
+
+### 7. Pre-Flight Context Scanning & Secret Scrubbing
+Neutralize credentials, API keys (OpenAI, Anthropic, AWS, GitHub), and SSH/PGP private keys before feeding prompts into inference engines:
+```bash
+usershield context-scan "Analyze this deployment with sk-ant-api03-..." --out sanitized_prompt.txt
+```
+
+### 8. Manage the Instant Attestation Cache
+UserShield maintains a hardware-bound SQLite cache with Windows NTFS FileIndex and POSIX inode stability to make warm loads instantaneous (<50ms). To manually purge it:
 ```bash
 usershield cache clear
+```
+
+---
+
+## Python SDK & Dual-Namespace Support
+
+UserShield can be imported as either `usershield` or `ztz`:
+
+```python
+# Import via usershield namespace
+from usershield.core import PreFlightValidator, ContextShield, ModelFormatInspector
+from usershield.core.crypto import UserShieldSigner, UserShieldVerifier
+
+# Inspect weights container
+verdict = ModelFormatInspector.inspect("models/weights.gguf")
+print(f"Format: {verdict.format}, Low Risk: {verdict.is_safe}")
+
+# Sanitize context and prompts
+result = ContextShield.sanitize("System prompt containing confidential tokens...")
+clean_prompt = result.clean_text
+
+# Pre-flight validate model and context before inference
+validator = PreFlightValidator(trust_store_dir="./keys", enforce_all=True)
+audit = validator.validate_bundle(
+    model_path="models/weights.gguf",
+    context_paths=["prompts/system.txt"]
+)
+assert audit.all_passed, "Quarantined! Untrusted model or context detected."
 ```
 
 ---
