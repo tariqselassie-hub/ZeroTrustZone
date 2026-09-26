@@ -62,6 +62,38 @@ SECRET_PATTERNS = [
 ]
 
 
+class EnclaveSeal:
+    """Represents a cryptographic hardware/enclave attestation seal from Security Den (Pillar 4)."""
+    def __init__(
+        self,
+        sealed: bool,
+        mode: str,
+        signature_hex: Optional[str] = None,
+        heptal_trace: Optional[List[int]] = None,
+        status: str = "SECURE",
+        message: str = "Hardware seal active",
+        timestamp: Optional[float] = None
+    ):
+        self.sealed = sealed
+        self.mode = mode
+        self.signature_hex = signature_hex
+        self.heptal_trace = heptal_trace
+        self.status = status
+        self.message = message
+        self.timestamp = timestamp or time.time()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sealed": self.sealed,
+            "mode": self.mode,
+            "signature_hex": self.signature_hex,
+            "heptal_trace": self.heptal_trace,
+            "status": self.status,
+            "message": self.message,
+            "timestamp": self.timestamp,
+        }
+
+
 class ContextAuditResult:
     """Represents the pre-flight verification output of context verification."""
     def __init__(
@@ -71,7 +103,8 @@ class ContextAuditResult:
         findings: List[Dict[str, Any]],
         digest_sha256: str,
         timestamp: float,
-        passed_preflight: bool = True
+        passed_preflight: bool = True,
+        seal: Optional[EnclaveSeal] = None
     ):
         self.clean_text = clean_text
         self.redactions_count = redactions_count
@@ -79,6 +112,7 @@ class ContextAuditResult:
         self.digest_sha256 = digest_sha256
         self.timestamp = timestamp
         self.passed_preflight = passed_preflight
+        self.seal = seal
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -88,6 +122,7 @@ class ContextAuditResult:
             "digest_sha256": self.digest_sha256,
             "timestamp": self.timestamp,
             "passed_preflight": self.passed_preflight,
+            "seal": self.seal.to_dict() if self.seal else None,
         }
 
 
@@ -155,6 +190,83 @@ class ContextShield:
         )
 
     @classmethod
+    def request_enclave_seal(
+        cls,
+        payload_digest: str,
+        enclave_url: Optional[str] = None,
+        timeout_sec: float = 0.5
+    ) -> EnclaveSeal:
+        """
+        Requests a Base-7 Heptal DSA attestation signature from Security Den (Port 5555).
+        Falls back to local sovereign HMAC-SHA256 signature if Enclave is offline.
+        """
+        import os
+        import json
+        import hmac
+        import urllib.request
+        import urllib.error
+
+        base_url = enclave_url or os.environ.get("SECURITY_DEN_URL", "http://127.0.0.1:5555")
+        endpoint = f"{base_url.rstrip('/')}/api/dsa/sign"
+        
+        req_data = json.dumps({
+            "payload": payload_digest,
+            "key_seed": 777,
+            "inject_fault": False
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            endpoint,
+            data=req_data,
+            headers={"Content-Type": "application/json", "User-Agent": "UserShield-Sentinel/2.0"},
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_sec) as response:
+                if response.status == 200:
+                    resp_body = json.loads(response.read().decode("utf-8"))
+                    if resp_body.get("status") == "secure":
+                        egress_data = resp_body.get("egress_data")
+                        sig_hex = bytes(egress_data).hex() if egress_data else None
+                        return EnclaveSeal(
+                            sealed=True,
+                            mode="SECURITY_DEN_DSA",
+                            signature_hex=sig_hex,
+                            heptal_trace=resp_body.get("heptal_trace"),
+                            status="SECURE",
+                            message=resp_body.get("message", "Security Den attestation sealed.")
+                        )
+        except Exception:
+            pass
+
+        # Sovereign Local Fallback
+        local_key = os.environ.get("USERSHIELD_SIGNING_KEY", "ZENITH_SOVEREIGN_ROOT_SECRET").encode("utf-8")
+        local_mac = hmac.new(local_key, payload_digest.encode("utf-8"), hashlib.sha256).hexdigest()
+        return EnclaveSeal(
+            sealed=True,
+            mode="LOCAL_SOVEREIGN_FALLBACK",
+            signature_hex=local_mac,
+            heptal_trace=None,
+            status="LOCAL_ATTESTED",
+            message="Enclave offline: local cryptographic MAC attached."
+        )
+
+    @classmethod
+    def seal_and_attest(
+        cls,
+        text: str,
+        enclave_url: Optional[str] = None
+    ) -> ContextAuditResult:
+        """
+        Sanitizes text and immediately requests a cryptographic attestation seal from Security Den.
+        """
+        result = cls.sanitize(text)
+        seal = cls.request_enclave_seal(result.digest_sha256, enclave_url=enclave_url)
+        result.seal = seal
+        return result
+
+    @classmethod
     def sanitize_messages(cls, messages: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], int]:
         """
         Sanitizes an entire chat history or multi-turn message array.
@@ -177,3 +289,19 @@ class ContextShield:
                 sanitized_list.append(dict(msg))
 
         return sanitized_list, all_findings, total_redacted
+
+    @classmethod
+    def seal_messages(
+        cls,
+        messages: List[Dict[str, str]],
+        enclave_url: Optional[str] = None
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], int, EnclaveSeal]:
+        """
+        Sanitizes an entire chat history or multi-turn message array and seals the composite payload.
+        Returns (sanitized_messages, all_findings, total_redactions, seal).
+        """
+        sanitized_list, all_findings, total_redacted = cls.sanitize_messages(messages)
+        composite_text = "||".join(m.get("content", "") for m in sanitized_list)
+        composite_digest = hashlib.sha256(composite_text.encode("utf-8")).hexdigest()
+        seal = cls.request_enclave_seal(composite_digest, enclave_url=enclave_url)
+        return sanitized_list, all_findings, total_redacted, seal

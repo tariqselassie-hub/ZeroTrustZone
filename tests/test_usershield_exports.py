@@ -14,7 +14,7 @@ class TestUserShieldExports(unittest.TestCase):
         from usershield.core.validator import PreFlightValidator
         from usershield.core.crypto import generate_keypair, UserShieldSigner, UserShieldVerifier
         from usershield.core.cache import AttestationCache
-        from usershield.core.context_shield import ContextShield, ContextAuditResult
+        from usershield.core.context_shield import ContextShield, ContextAuditResult, EnclaveSeal
         from usershield.core.model_inspector import ModelFormatInspector
         from usershield.lic.fingerprint import HardwareFingerprint
         from usershield.lic.manager import LicenseManager
@@ -28,6 +28,7 @@ class TestUserShieldExports(unittest.TestCase):
         self.assertIsNotNone(UserShieldVerifier)
         self.assertIsNotNone(HardwareFingerprint)
         self.assertIsNotNone(ModelFormatInspector)
+        self.assertIsNotNone(EnclaveSeal)
 
 
 if __name__ == "__main__":

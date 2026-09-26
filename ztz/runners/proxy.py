@@ -9,6 +9,7 @@ import logging
 from aiohttp import web, ClientSession
 from ztz.core.validator import PreFlightValidator
 from ztz.core.trust_store import TrustStore
+from ztz.core.context_shield import ContextShield, ContextAuditResult, EnclaveSeal
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,15 @@ class InferenceProxy:
         # Maps absolute_path -> {"inode": x, "size": y, "mtime_ns": z, "status": "VERIFIED"}
         self._memory_cache = {}
         
-    async def _proxy_request(self, request: web.Request) -> web.StreamResponse:
+    async def _proxy_request(self, request: web.Request, data_override: bytes = None, extra_headers: dict = None) -> web.StreamResponse:
         """Forward the request to the real backend and stream the response back natively."""
         async with ClientSession() as session:
-            data = await request.read()
+            data = data_override if data_override is not None else await request.read()
             headers = {k: v for k, v in request.headers.items() if k.lower() != 'host'}
+            if extra_headers:
+                headers.update(extra_headers)
+            if data_override is not None:
+                headers['Content-Length'] = str(len(data))
             
             try:
                 async with session.request(
@@ -139,10 +144,34 @@ class InferenceProxy:
             body = await request.json()
         except Exception:
             return web.json_response({"error": "Invalid JSON"}, status=400)
-            
+
+        # Pre-Flight Context Attestation (Prompts / Messages)
+        attestation_headers = {}
+        redactions = 0
+        if "prompt" in body and isinstance(body["prompt"], str):
+            audit = ContextShield.seal_and_attest(body["prompt"])
+            body["prompt"] = audit.clean_text
+            redactions = audit.redactions_count
+            attestation_headers["X-UserShield-Digest"] = audit.digest_sha256
+            if audit.seal:
+                attestation_headers["X-UserShield-Enclave-Seal"] = audit.seal.mode
+                attestation_headers["X-UserShield-Enclave-Status"] = audit.seal.status
+            if redactions > 0:
+                print(f"[\033[93mQUENCH\033[0m] Neutralized {redactions} secret(s) in prompt before inference.")
+        elif "messages" in body and isinstance(body["messages"], list):
+            clean_msgs, findings, total_redacted, seal = ContextShield.seal_messages(body["messages"])
+            body["messages"] = clean_msgs
+            redactions = total_redacted
+            attestation_headers["X-UserShield-Enclave-Seal"] = seal.mode
+            attestation_headers["X-UserShield-Enclave-Status"] = seal.status
+            if redactions > 0:
+                print(f"[\033[93mQUENCH\033[0m] Neutralized {redactions} secret(s) across messages before inference.")
+
+        sanitized_data = json.dumps(body).encode("utf-8")
+
         model_name = body.get("model")
         if not model_name:
-            return await self._proxy_request(request)
+            return await self._proxy_request(request, data_override=sanitized_data, extra_headers=attestation_headers)
             
         model_path = self._resolve_model_path(model_name)
         
@@ -152,7 +181,7 @@ class InferenceProxy:
             
         # 1. Ultra-fast L1 In-Memory Cache (Sub-millisecond)
         if self._check_memory_cache(model_path):
-            return await self._proxy_request(request)
+            return await self._proxy_request(request, data_override=sanitized_data, extra_headers=attestation_headers)
             
         print(f"\n[ZTZ Proxy] Cold check for model: '{model_name}'")
         print(f"[ZTZ Proxy] Target physical file: {model_path}")
@@ -174,7 +203,7 @@ class InferenceProxy:
         # Populate L1 cache on pass
         self._update_memory_cache(model_path)
         
-        return await self._proxy_request(request)
+        return await self._proxy_request(request, data_override=sanitized_data, extra_headers=attestation_headers)
 
     async def passthrough(self, request: web.Request) -> web.Response:
         return await self._proxy_request(request)
