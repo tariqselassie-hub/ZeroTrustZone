@@ -106,7 +106,7 @@ def run_llama_protected(
         validator = PreFlightValidator(trust_store, use_cache=use_cache)
         all_clean, rows, elapsed = validator.audit_batch(targets)
 
-        # Print the Deen structured Unicode audit table
+        # Print the structured Unicode audit table
         print_audit_table(rows)
 
         passed_count = sum(1 for r in rows if r["status"] in ("VERIFIED", "VERIFIED_CACHE"))

@@ -84,7 +84,7 @@ usershield verify models/qwen2.5-7b-instruct-q4_k_m.gguf --trust-store ./keys
 ```bash
 usershield run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f prompt.txt --ctx-size 4096
 ```
-If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical Deen-styled lockdown banner before `llama-cli` starts.
+If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical lockdown banner before `llama-cli` starts.
 
 ### 5. Start the Zero-Trust Reverse Proxy (Pro Tier)
 To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:

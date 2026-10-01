@@ -51,8 +51,8 @@ class TestContextAttestation(unittest.TestCase):
         self.assertEqual(result.seal.status, "LOCAL_ATTESTED")
         self.assertIsNotNone(result.seal.signature_hex)
 
-    def test_mocked_security_den_dsa_seal(self):
-        """Verify proper ingestion and parsing of Base-7 Heptal DSA signature from Security Den."""
+    def test_mocked_ztz_enclave_dsa_seal(self):
+        """Verify proper ingestion and parsing of ZTZ DSA signature from ZTZ Enclave."""
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.__enter__.return_value = mock_response
@@ -60,7 +60,7 @@ class TestContextAttestation(unittest.TestCase):
             "status": "secure",
             "message": "Signature Generated Successfully.",
             "egress_data": [10, 20, 30, 40, 50, 60, 70],
-            "heptal_trace": [-3, -2, -1, 0, 1, 2, 3]
+            "ztz_trace": [-3, -2, -1, 0, 1, 2, 3]
         }).encode("utf-8")
 
         with patch("urllib.request.urlopen", return_value=mock_response):
@@ -70,10 +70,10 @@ class TestContextAttestation(unittest.TestCase):
             )
             self.assertIsNotNone(result.seal)
             self.assertTrue(result.seal.sealed)
-            self.assertEqual(result.seal.mode, "SECURITY_DEN_DSA")
+            self.assertEqual(result.seal.mode, "ZTZ_DSA")
             self.assertEqual(result.seal.status, "SECURE")
             self.assertEqual(result.seal.signature_hex, "0a141e28323c46")
-            self.assertEqual(result.seal.heptal_trace, [-3, -2, -1, 0, 1, 2, 3])
+            self.assertEqual(result.seal.ztz_trace, [-3, -2, -1, 0, 1, 2, 3])
 
     def test_seal_messages_multi_turn(self):
         """Verify multi-turn chat message scrubbing and composite sealing."""

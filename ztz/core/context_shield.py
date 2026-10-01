@@ -1,7 +1,7 @@
 """
 ZTZ Pre-Flight Context Firewall (core/context_shield.py)
 Zero-Trust context sanitization, secret scrubbing, and cryptographic pre-flight
-attestation before LLM ingestion (Pillar 5 of Zenith Research Division).
+attestation before LLM ingestion (UserShield Project).
 """
 
 import re
@@ -69,7 +69,7 @@ class EnclaveSeal:
         sealed: bool,
         mode: str,
         signature_hex: Optional[str] = None,
-        heptal_trace: Optional[List[int]] = None,
+        ztz_trace: Optional[List[int]] = None,
         status: str = "SECURE",
         message: str = "Hardware seal active",
         timestamp: Optional[float] = None
@@ -77,7 +77,7 @@ class EnclaveSeal:
         self.sealed = sealed
         self.mode = mode
         self.signature_hex = signature_hex
-        self.heptal_trace = heptal_trace
+        self.ztz_trace = ztz_trace
         self.status = status
         self.message = message
         self.timestamp = timestamp or time.time()
@@ -87,7 +87,7 @@ class EnclaveSeal:
             "sealed": self.sealed,
             "mode": self.mode,
             "signature_hex": self.signature_hex,
-            "heptal_trace": self.heptal_trace,
+            "ztz_trace": self.ztz_trace,
             "status": self.status,
             "message": self.message,
             "timestamp": self.timestamp,
@@ -197,7 +197,7 @@ class ContextShield:
         timeout_sec: float = 0.5
     ) -> EnclaveSeal:
         """
-        Requests a Base-7 Heptal DSA attestation signature from Security Den (Port 5555).
+        Requests a ZTZ DSA attestation signature from ZTZ Enclave (Port 5555).
         Falls back to local sovereign HMAC-SHA256 signature if Enclave is offline.
         """
         import os
@@ -206,7 +206,7 @@ class ContextShield:
         import urllib.request
         import urllib.error
 
-        base_url = enclave_url or os.environ.get("SECURITY_DEN_URL", "http://127.0.0.1:5555")
+        base_url = enclave_url or os.environ.get("ZTZ_ENCLAVE_URL", "http://127.0.0.1:5555")
         endpoint = f"{base_url.rstrip('/')}/api/dsa/sign"
         
         req_data = json.dumps({
@@ -231,23 +231,23 @@ class ContextShield:
                         sig_hex = bytes(egress_data).hex() if egress_data else None
                         return EnclaveSeal(
                             sealed=True,
-                            mode="SECURITY_DEN_DSA",
+                            mode="ZTZ_DSA",
                             signature_hex=sig_hex,
-                            heptal_trace=resp_body.get("heptal_trace"),
+                            ztz_trace=resp_body.get("ztz_trace"),
                             status="SECURE",
-                            message=resp_body.get("message", "Security Den attestation sealed.")
+                            message=resp_body.get("message", "ZTZ Enclave attestation sealed.")
                         )
         except Exception:
             pass
 
         # Sovereign Local Fallback
-        local_key = os.environ.get("USERSHIELD_SIGNING_KEY", "ZENITH_SOVEREIGN_ROOT_SECRET").encode("utf-8")
+        local_key = os.environ.get("USERSHIELD_SIGNING_KEY", "ZTZ_SOVEREIGN_ROOT_SECRET").encode("utf-8")
         local_mac = hmac.new(local_key, payload_digest.encode("utf-8"), hashlib.sha256).hexdigest()
         return EnclaveSeal(
             sealed=True,
             mode="LOCAL_SOVEREIGN_FALLBACK",
             signature_hex=local_mac,
-            heptal_trace=None,
+            ztz_trace=None,
             status="LOCAL_ATTESTED",
             message="Enclave offline: local cryptographic MAC attached."
         )

@@ -1,6 +1,6 @@
 """
 UserShield: Sovereign Offline-First Zero-Trust Cryptographic Pre-Flight AI Firewall.
-Pillar 5 of Zenith Research Division.
+Pillar 5 of UserShield Project.
 """
 
 from ztz.sdk.decorators import guard

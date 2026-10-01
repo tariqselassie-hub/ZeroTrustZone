@@ -9,7 +9,7 @@ description = "Offline-First Zero-Trust Cryptographic Pre-Flight Firewall for Lo
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Zenith Research Division", email = "research@zenith.internal" }
+    { name = "Tariq Selassie", email = "tariqselassie@usershield.internal" }
 ]
 keywords = ["ai-safety", "llama-cpp", "gguf", "cryptography", "zero-trust", "attestation", "offline"]
 classifiers = [

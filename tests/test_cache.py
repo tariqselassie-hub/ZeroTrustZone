@@ -34,11 +34,11 @@ class TestAttestationCache(unittest.TestCase):
         with open(test_file, "wb") as f:
             f.write(b"SAMPLE_TENSORS_12345")
 
-        self.cache.store_attestation(test_file, auth_key="zenith_root", algo="Ed25519")
+        self.cache.store_attestation(test_file, auth_key="ztz_root", algo="Ed25519")
         cached = self.cache.get_cached_attestation(test_file)
 
         self.assertIsNotNone(cached)
-        self.assertEqual(cached["key"], "zenith_root")
+        self.assertEqual(cached["key"], "ztz_root")
         self.assertEqual(cached["algo"], "Ed25519")
         self.assertEqual(cached["status"], "VERIFIED_CACHE")
 
@@ -48,14 +48,14 @@ class TestAttestationCache(unittest.TestCase):
         with open(test_file, "wb") as f:
             f.write(b"SAMPLE_TENSORS_PERSIST")
 
-        self.cache.store_attestation(test_file, auth_key="zenith_root", algo="Ed25519")
+        self.cache.store_attestation(test_file, auth_key="ztz_root", algo="Ed25519")
 
         # Instantiate second cache pointing to the same DB
         cache2 = AttestationCache(safe_db_path=self.db_path)
         try:
             cached2 = cache2.get_cached_attestation(test_file)
             self.assertIsNotNone(cached2, "Cache record must persist across multiple AttestationCache instances!")
-            self.assertEqual(cached2["key"], "zenith_root")
+            self.assertEqual(cached2["key"], "ztz_root")
         finally:
             cache2.close()
 
@@ -65,7 +65,7 @@ class TestAttestationCache(unittest.TestCase):
         with open(test_file, "wb") as f:
             f.write(b"ORIGINAL_BYTES")
 
-        self.cache.store_attestation(test_file, auth_key="zenith_root", algo="Ed25519")
+        self.cache.store_attestation(test_file, auth_key="ztz_root", algo="Ed25519")
 
         # Modify file content and size
         with open(test_file, "ab") as f:
@@ -80,7 +80,7 @@ class TestAttestationCache(unittest.TestCase):
         with open(test_file, "wb") as f:
             f.write(b"DATA")
 
-        self.cache.store_attestation(test_file, auth_key="zenith_root", algo="Ed25519")
+        self.cache.store_attestation(test_file, auth_key="ztz_root", algo="Ed25519")
         self.cache.clear()
         self.assertIsNone(self.cache.get_cached_attestation(test_file))
 
