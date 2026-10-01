@@ -1,6 +1,12 @@
-# ZTZ 🛡️
+# UserShield (ZTZ) 🛡️
+
+[![CI](https://github.com/tariqselassie-hub/ZeroTrustZone/actions/workflows/ci.yml/badge.svg)](https://github.com/tariqselassie-hub/ZeroTrustZone/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-available-brightgreen.svg)](docs/index.md)
 
 **Offline-First Zero-Trust Cryptographic Pre-Flight Firewall for Local AI Runtimes**
+
+> 📖 **Full documentation is available in the [`docs/` folder](docs/index.md).**
 
 ZTZ intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtimes) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, ZTZ ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
 
@@ -160,4 +166,6 @@ usershield fingerprint
 ---
 
 ## License
-ZTZ Core is licensed under the Apache License, Version 2.0.
+UserShield (ZTZ Core) is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for more details. 
+
+For information on open-source libraries used in this project, please refer to the [Third-Party Notices](THIRDPARTY.md).
