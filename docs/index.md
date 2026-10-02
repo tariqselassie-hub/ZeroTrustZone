@@ -16,9 +16,18 @@ It operates entirely offline with an instantaneous machine-bound SQLite cache to
 
 ## Quick Start
 ```bash
-# 1. Sign your model offline
-usershield sign models/model.gguf --key ./keys/private.pem
+# 1. Initialize environment and root authority keys (1-step setup)
+usershield init
 
-# 2. Run the model under Zero-Trust protection
+# 2. Check system diagnostics and running AI daemons
+usershield doctor
+
+# 3. Discover and attest local Ollama models in 1 click
+usershield models list
+usershield models sign llama3.2
+
+# 4. Run llama.cpp or protect Ollama/LM Studio via reverse proxy
 usershield run --llama-bin ./llama-cli -m models/model.gguf
+usershield proxy --port 11434 --upstream-port 11435
 ```
+

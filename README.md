@@ -67,49 +67,53 @@ pip install -e .
 
 ## Quickstart Guide
 
-### 1. Generate an Authority Keypair (Ed25519)
+### 1. Initialize UserShield (1-Step Setup)
 ```bash
-usershield keygen --out-dir ./keys --name my_authority
+usershield init
 ```
-This generates:
-- `./keys/my_authority_priv.pem` (Keep protected!)
-- `./keys/my_authority_pub.pem` (Distribute to users / trust store)
+Automatically provisions your root authority keypair (`authority_priv.pem` and `authority_pub.pem`) and installs the global trust store in `~/.usershield/keys`. UserShield now works seamlessly across any folder.
 
-### 2. Sign Model Weights or Context Payloads
+### 2. Verify System Health & Runtime Diagnostics
 ```bash
-usershield sign models/qwen2.5-7b-instruct-q4_k_m.gguf --key ./keys/my_authority_priv.pem
+usershield doctor
 ```
-Generates detached signature: `models/qwen2.5-7b-instruct-q4_k_m.gguf.sig`.
+Audits your cryptography engine, loaded keys, cache health, and automatically detects running Ollama / LM Studio instances.
 
-### 3. Verify Files Offline
+### 3. Discover & Sign Local Ollama Models in 1 Step
 ```bash
-usershield verify models/qwen2.5-7b-instruct-q4_k_m.gguf --trust-store ./keys
+# View all installed models and their attestation status
+usershield models list
+
+# Automatically resolve and sign an Ollama model tag
+usershield models sign llama3.2
+
+# Structural container inspection for bytecode / pickle risks
+usershield models inspect llama3.2
 ```
 
-### 4. Run `llama.cpp` under ZTZ Protection
+### 4. Verify Any File or Model Offline
 ```bash
-usershield run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f prompt.txt --ctx-size 4096
+usershield verify models/qwen2.5-7b-instruct-q4_k_m.gguf
 ```
-If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical lockdown banner before `llama-cli` starts.
 
 ### 5. Start the Zero-Trust Reverse Proxy (Pro Tier)
 To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:
 ```bash
 usershield proxy --port 11434 --upstream-port 11435
 ```
-ZTZ transparently parses incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
+ZTZ transparently intercepts incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
 
-### 6. Inspect Model Weights for Bytecode & Structural Risks
-Inspect containers (GGUF, Safetensors, and legacy PyTorch `.pt`/`.bin` pickle archives) before loading:
+### 6. Run `llama.cpp` under Pre-Flight Protection
 ```bash
-usershield inspect-model models/qwen2.5-7b-instruct-q4_k_m.gguf
+usershield run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f prompt.txt --ctx-size 4096
 ```
-If legacy PyTorch pickle opcodes (`cos`, `cposix`, etc.) are detected, UserShield raises a `CRITICAL` risk alert warning of potential Arbitrary Code Execution (RCE).
+If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical lockdown banner before `llama-cli` starts.
 
 ### 7. Pre-Flight Context Scanning & Secret Scrubbing
 Neutralize credentials, API keys (OpenAI, Anthropic, AWS, GitHub), and SSH/PGP private keys before feeding prompts into inference engines:
 ```bash
 usershield context-scan "Analyze this deployment with sk-ant-api03-..." --out sanitized_prompt.txt
+cat confidential_prompt.txt | usershield context-scan - --json
 ```
 
 ### 8. Manage the Instant Attestation Cache

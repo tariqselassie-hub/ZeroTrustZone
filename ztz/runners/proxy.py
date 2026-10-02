@@ -10,6 +10,7 @@ from aiohttp import web, ClientSession
 from ztz.core.validator import PreFlightValidator
 from ztz.core.trust_store import TrustStore
 from ztz.core.context_shield import ContextShield, ContextAuditResult, EnclaveSeal
+from ztz.core.model_manager import get_ollama_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class InferenceProxy:
         self.upstream_url = f"http://{upstream_host}:{upstream_port}"
         self.use_cache = use_cache
         
-        self.model_base_dir = os.path.expanduser("~/.ollama/models")
+        self.model_base_dir = get_ollama_base_dir()
         
         # In-memory LRU cache to completely bypass SQLite latency on sub-millisecond hot loops
         # Maps absolute_path -> {"inode": x, "size": y, "mtime_ns": z, "status": "VERIFIED"}
