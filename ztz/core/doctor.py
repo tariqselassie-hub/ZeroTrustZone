@@ -1,5 +1,5 @@
 """
-Diagnostics & System Health Sentinel for UserShield (ztz/core/doctor.py).
+Diagnostics & System Health Sentinel for ZeroTrustZone (ztz/core/doctor.py).
 Evaluates crypto backends, trust stores, model directories, runtime daemons,
 and attestation cache health.
 """

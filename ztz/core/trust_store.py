@@ -8,22 +8,24 @@ import glob
 from typing import Dict, Any, List
 from cryptography.hazmat.primitives import serialization
 
-DEFAULT_USERSHIELD_STORE = os.path.expanduser("~/.usershield/keys")
+DEFAULT_ZTZ_STORE = os.path.expanduser("~/.ztz/keys")
+DEFAULT_ZEROTRUSTZONE_STORE = os.path.expanduser("~/.zerotrustzone/keys")
 DEFAULT_USER_STORE = os.path.expanduser("~/.ztz/trusted_keys")
 DEFAULT_LOCAL_STORE = "./keys"
-DEFAULT_SEARCH_PATHS = [DEFAULT_LOCAL_STORE, DEFAULT_USERSHIELD_STORE, DEFAULT_USER_STORE]
+DEFAULT_SEARCH_PATHS = [DEFAULT_LOCAL_STORE, DEFAULT_ZTZ_STORE, DEFAULT_ZEROTRUSTZONE_STORE, DEFAULT_USER_STORE]
 
 def get_default_key_dir() -> str:
-    """Returns the primary directory for storing keys (~/.usershield/keys)."""
-    return DEFAULT_USERSHIELD_STORE
+    """Returns the primary directory for storing keys (~/.ztz/keys)."""
+    return DEFAULT_ZTZ_STORE
 
 def find_private_key(preferred_path: str = None, name: str = "authority") -> str:
     """
     Attempts to locate a private signing key:
     1. preferred_path (if provided and exists)
     2. ./keys/{name}_priv.pem
-    3. ~/.usershield/keys/{name}_priv.pem
-    4. ~/.ztz/trusted_keys/{name}_priv.pem
+    3. ~/.ztz/keys/{name}_priv.pem
+    4. ~/.zerotrustzone/keys/{name}_priv.pem
+    5. ~/.ztz/trusted_keys/{name}_priv.pem
     """
     if preferred_path and os.path.exists(preferred_path):
         return preferred_path
@@ -31,8 +33,10 @@ def find_private_key(preferred_path: str = None, name: str = "authority") -> str
     candidates = [
         os.path.join(DEFAULT_LOCAL_STORE, f"{name}_priv.pem"),
         os.path.join(DEFAULT_LOCAL_STORE, f"{name}.pem"),
-        os.path.join(DEFAULT_USERSHIELD_STORE, f"{name}_priv.pem"),
-        os.path.join(DEFAULT_USERSHIELD_STORE, f"{name}.pem"),
+        os.path.join(DEFAULT_ZTZ_STORE, f"{name}_priv.pem"),
+        os.path.join(DEFAULT_ZTZ_STORE, f"{name}.pem"),
+        os.path.join(DEFAULT_ZEROTRUSTZONE_STORE, f"{name}_priv.pem"),
+        os.path.join(DEFAULT_ZEROTRUSTZONE_STORE, f"{name}.pem"),
         os.path.join(DEFAULT_USER_STORE, f"{name}_priv.pem"),
     ]
     for c in candidates:

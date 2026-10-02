@@ -9,9 +9,9 @@ description = "Offline-First Zero-Trust Cryptographic Pre-Flight Firewall for Lo
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Tariq Selassie", email = "tariqselassie@usershield.internal" }
+    { name = "Tariq Selassie", email = "tariqselassie@zerotrustzone.internal" }
 ]
-keywords = ["ai-safety", "llama-cpp", "gguf", "cryptography", "zero-trust", "attestation", "offline"]
+keywords = ["ai-safety", "llama-cpp", "gguf", "cryptography", "zero-trust", "attestation", "offline", "zerotrustzone", "ztz"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -37,13 +37,13 @@ dev = [
 
 [project.scripts]
 ztz = "ztz.cli:main"
+zerotrustzone = "ztz.cli:main"
 ztz-run = "ztz.cli:run_cli"
 ztz-sign = "ztz.cli:sign_cli"
 ztz-verify = "ztz.cli:verify_cli"
 ztz-lic = "ztz.cli:license_cli"
-usershield = "ztz.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ztz*", "usershield*"]
+include = ["ztz*", "zerotrustzone*"]
 

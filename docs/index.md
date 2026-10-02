@@ -1,6 +1,6 @@
-# UserShield (ZTZ) Documentation
+# ZeroTrustZone (ZTZ) Documentation
 
-Welcome to the UserShield documentation. UserShield (also known as ZTZ - Zero Trust Zone) is an offline-first cryptographic pre-flight firewall for local AI weights and context payloads.
+Welcome to the ZeroTrustZone documentation. ZeroTrustZone (ZTZ) is an offline-first cryptographic pre-flight firewall for local AI weights and context payloads.
 
 ## Table of Contents
 1. [Architecture Overview](architecture.md)
@@ -8,7 +8,7 @@ Welcome to the UserShield documentation. UserShield (also known as ZTZ - Zero Tr
 
 ## Core Concepts
 
-UserShield intercepts AI execution flows to cryptographically guarantee that:
+ZTZ intercepts AI execution flows to cryptographically guarantee that:
 - **Model Weights** (`.gguf`, `.safetensors`, `.bin`) have not been tampered with or replaced by malicious actors.
 - **Context Payloads** (prompts) are scrubbed of secrets, API keys, and sensitive data *before* they are sent to the execution environment.
 
@@ -17,17 +17,16 @@ It operates entirely offline with an instantaneous machine-bound SQLite cache to
 ## Quick Start
 ```bash
 # 1. Initialize environment and root authority keys (1-step setup)
-usershield init
+ztz init
 
 # 2. Check system diagnostics and running AI daemons
-usershield doctor
+ztz doctor
 
 # 3. Discover and attest local Ollama models in 1 click
-usershield models list
-usershield models sign llama3.2
+ztz models list
+ztz models sign llama3.2
 
 # 4. Run llama.cpp or protect Ollama/LM Studio via reverse proxy
-usershield run --llama-bin ./llama-cli -m models/model.gguf
-usershield proxy --port 11434 --upstream-port 11435
+ztz run --llama-bin ./llama-cli -m models/model.gguf
+ztz proxy --port 11434 --upstream-port 11435
 ```
-

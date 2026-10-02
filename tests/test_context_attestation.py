@@ -1,5 +1,5 @@
 """
-Unit and Integration Tests for UserShield Pre-Flight Context Attestation (Pillar 5 -> Pillar 4).
+Unit and Integration Tests for ZeroTrustZone (ZTZ) Pre-Flight Context Attestation (Pillar 5 -> Pillar 4).
 Tests secret scrubbing, deterministic SHA-256 digests, and Security Den Enclave sealing.
 """
 
@@ -8,10 +8,10 @@ from unittest.mock import patch, MagicMock
 import json
 
 from ztz.core.context_shield import ContextShield, ContextAuditResult, EnclaveSeal
-from usershield.core.context_shield import (
-    ContextShield as USContextShield,
-    ContextAuditResult as USContextAuditResult,
-    EnclaveSeal as USEnclaveSeal,
+from zerotrustzone.core.context_shield import (
+    ContextShield as ZTZContextShield,
+    ContextAuditResult as ZTZContextAuditResult,
+    EnclaveSeal as ZTZEnclaveSeal,
 )
 
 
@@ -22,10 +22,10 @@ class TestContextAttestation(unittest.TestCase):
         self.clean_sample = "Calculate the probability amplitude of 6-particle scattering at 9 loops."
 
     def test_reexports(self):
-        """Verify EnclaveSeal and ContextShield are cleanly accessible via usershield.*."""
-        self.assertIs(USContextShield, ContextShield)
-        self.assertIs(USContextAuditResult, ContextAuditResult)
-        self.assertIs(USEnclaveSeal, EnclaveSeal)
+        """Verify EnclaveSeal and ContextShield are cleanly accessible via zerotrustzone.*."""
+        self.assertIs(ZTZContextShield, ContextShield)
+        self.assertIs(ZTZContextAuditResult, ContextAuditResult)
+        self.assertIs(ZTZEnclaveSeal, EnclaveSeal)
 
     def test_sanitize_scrubs_secrets(self):
         """Verify prompt scrubbing neutralizes OpenAI API keys and AWS keys."""

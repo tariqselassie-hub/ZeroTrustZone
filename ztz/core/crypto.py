@@ -161,6 +161,6 @@ def generate_keypair(
     return priv_path, pub_path
 
 
-# Backward-compatible and sovereign aliases for UserShield ecosystem
-UserShieldSigner = ZTZSigner
-UserShieldVerifier = ZTZVerifier
+# Aliases for ZeroTrustZone ecosystem
+ZeroTrustZoneSigner = ZTZSigner
+ZeroTrustZoneVerifier = ZTZVerifier

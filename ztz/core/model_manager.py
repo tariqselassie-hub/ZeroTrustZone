@@ -1,5 +1,5 @@
 """
-Model Manager for UserShield / ZTZ (ztz/core/model_manager.py).
+Model Manager for ZeroTrustZone / ZTZ (ztz/core/model_manager.py).
 Discovers local Ollama / LM Studio / GGUF models, parses OCI manifests,
 checks attestation status, and performs one-command signing.
 """
@@ -194,7 +194,7 @@ def sign_model_target(
     resolved_key = find_private_key(private_key_path)
     if not resolved_key:
         raise FileNotFoundError(
-            "No private signing key found. Please run 'usershield init' or provide --key <path>."
+            "No private signing key found. Please run 'ztz init' or provide --key <path>."
         )
 
     signer = ZTZSigner(resolved_key)

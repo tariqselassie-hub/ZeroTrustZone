@@ -1,5 +1,5 @@
 """
-Tests for UserShield enhancements:
+Tests for ZeroTrustZone (ZTZ) enhancements:
 - Environment initialization (init)
 - System diagnostics (doctor)
 - Ollama & local model management (discovery, resolution, signing)
@@ -26,7 +26,7 @@ from ztz.core.model_manager import (
 )
 from ztz.cli import main, build_parser
 
-class TestUserShieldEnhancements(unittest.TestCase):
+class TestZeroTrustZoneEnhancements(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
 

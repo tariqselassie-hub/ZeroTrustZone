@@ -100,7 +100,7 @@ def print_summary_card(status: str, total_checked: int, passed: int, failed: int
 def print_init_card(info: Dict[str, Any]):
     width = 78
     print(f"\n╔{'═' * width}╗")
-    print(f"║                USERSHIELD / ZTZ — ENVIRONMENT INITIALIZED             ║")
+    print(f"║             ZEROTRUSTZONE (ZTZ) — ENVIRONMENT INITIALIZED             ║")
     print(f"╠{'═' * width}╣")
     print(f"║ Base Home      : {info['home_dir'][:width-20]:<{width-19}}║")
     print(f"║ Trust Store    : {info['keys_dir'][:width-20]:<{width-19}}║")
@@ -109,16 +109,16 @@ def print_init_card(info: Dict[str, Any]):
     print(f"║ Authority Pub  : {info['public_key'][:width-20]:<{width-19}}║")
     print(f"╠{'═' * width}╣")
     print(f"║  Next Steps:                                                                 ║")
-    print(f"║   1. Run 'usershield doctor' to verify local runtime health                  ║")
-    print(f"║   2. Run 'usershield models list' to view local Ollama models                ║")
-    print(f"║   3. Run 'usershield models sign <name>' to sign a model in 1 click          ║")
-    print(f"║   4. Run 'usershield proxy' to guard Ollama / LM Studio inference            ║")
+    print(f"║   1. Run 'ztz doctor' to verify local runtime health                         ║")
+    print(f"║   2. Run 'ztz models list' to view local Ollama models                       ║")
+    print(f"║   3. Run 'ztz models sign <name>' to sign a model in 1 click                 ║")
+    print(f"║   4. Run 'ztz proxy' to guard Ollama / LM Studio inference                   ║")
     print(f"╚{'═' * width}╝\n")
 
 def print_doctor_report(checks: Dict[str, Any]):
     width = 78
     print(f"\n╔{'═' * width}╗")
-    print(f"║                   USERSHIELD — SYSTEM HEALTH & DIAGNOSTICS            ║")
+    print(f"║                ZEROTRUSTZONE — SYSTEM HEALTH & DIAGNOSTICS            ║")
     print(f"╠{'═' * width}╣")
     
     # Platform
@@ -135,7 +135,7 @@ def print_doctor_report(checks: Dict[str, Any]):
     # Trust store
     t = checks.get("trust_store", {})
     t_icon = "✔" if t.get("ok") else "⚠"
-    auth_list = ", ".join(t.get("authorities", [])) or "None (Run 'usershield init')"
+    auth_list = ", ".join(t.get("authorities", [])) or "None (Run 'ztz init')"
     t_str = f"{t_icon} {t.get('loaded_authorities_count', 0)} loaded authority key(s): [{auth_list}]"
     print(f"║ Trust Store    : {t_str[:width-20]:<{width-19}}║")
     sign_str = f"{'✔' if t.get('can_sign') else '⚠'} Signing Key: {t.get('default_signing_key') or 'None'}"
@@ -161,7 +161,7 @@ def print_doctor_report(checks: Dict[str, Any]):
     # Verdict
     print(f"╠{'═' * width}╣")
     v = checks.get("verdict", "UNKNOWN")
-    v_badge = "✔ ALL SYSTEMS SECURE & OPERATIONAL" if v == "READY" else "⚠ ACTION RECOMMENDED: Run 'usershield init'"
+    v_badge = "✔ ALL SYSTEMS SECURE & OPERATIONAL" if v == "READY" else "⚠ ACTION RECOMMENDED: Run 'ztz init'"
     print(f"║ Verdict        : {v_badge:<{width-20}} ║")
     print(f"╚{'═' * width}╝\n")
 

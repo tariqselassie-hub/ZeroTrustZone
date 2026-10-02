@@ -1,5 +1,5 @@
 """
-UserShield Model Weight & Architecture Pre-Flight Inspector (core/model_inspector.py)
+ZeroTrustZone (ZTZ) Model Weight & Architecture Pre-Flight Inspector (core/model_inspector.py)
 Inspects local model weight containers (GGUF, Safetensors, ONNX, PyTorch)
 before memory mapping or tensor allocation.
 

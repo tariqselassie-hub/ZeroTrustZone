@@ -1,5 +1,5 @@
 """
-Unified Command-Line Interface for UserShield / ZTZ.
+Unified Command-Line Interface for ZeroTrustZone (ZTZ).
 Commands:
   - init: Initialize global configuration, trust store, and Root Authority keypair
   - doctor: Comprehensive system health, crypto, and runtime diagnostics
@@ -85,7 +85,7 @@ def cmd_models(args: argparse.Namespace) -> int:
         if getattr(args, "json", False):
             print(json.dumps(models, indent=2))
         else:
-            print_header(title="USERSHIELD — LOCAL MODEL INVENTORY", subtitle="Ollama & Local Runtime Attestation Sentinel")
+            print_header(title="ZEROTRUSTZONE — LOCAL MODEL INVENTORY", subtitle="Ollama & Local Runtime Attestation Sentinel")
             if not models:
                 print("No Ollama models detected. Use Ollama to pull models or verify your storage directory.")
             else:
@@ -94,7 +94,7 @@ def cmd_models(args: argparse.Namespace) -> int:
                 unsigned = len(models) - verified
                 print(f"\nInventory: {len(models)} total | {verified} verified | {unsigned} unsigned")
                 if unsigned > 0:
-                    print("Tip: Run 'usershield models sign <model_name>' to sign and attest any model.")
+                    print("Tip: Run 'ztz models sign <model_name>' to sign and attest any model.")
         return 0
     elif action == "sign":
         try:
@@ -120,7 +120,7 @@ def cmd_models(args: argparse.Namespace) -> int:
         if getattr(args, "json", False):
             print(json.dumps(rep.to_dict(), indent=2))
         else:
-            print_header(title="USERSHIELD — MODEL WEIGHT INSPECTOR", subtitle="Container & Bytecode Security Probe")
+            print_header(title="ZEROTRUSTZONE — MODEL WEIGHT INSPECTOR", subtitle="Container & Bytecode Security Probe")
             print(f"Target Model    : {args.target}")
             print(f"Physical File   : {rep.file_path}")
             print(f"Format          : {rep.format}")
@@ -175,7 +175,7 @@ def cmd_sign(args: argparse.Namespace) -> int:
     try:
         key_path = find_private_key(args.key)
         if not key_path:
-            print("[ERROR] No private key found. Run 'usershield init' or provide --key <path>.", file=sys.stderr)
+            print("[ERROR] No private key found. Run 'ztz init' or provide --key <path>.", file=sys.stderr)
             return 1
         signer = ZTZSigner(key_path)
         out_sig = signer.sign_file(args.target, output_sig_path=args.out)
@@ -265,7 +265,7 @@ def cmd_inspect_model(args: argparse.Namespace) -> int:
         print(json.dumps(rep.to_dict(), indent=2))
         return 0 if rep.is_safe_format else 1
 
-    print_header(title="USERSHIELD — MODEL WEIGHT INSPECTOR", subtitle="Container & Bytecode Security Probe")
+    print_header(title="ZEROTRUSTZONE — MODEL WEIGHT INSPECTOR", subtitle="Container & Bytecode Security Probe")
     print(f"Target File     : {rep.file_path}")
     print(f"Format          : {rep.format}")
     print(f"Size            : {rep.file_size_bytes} bytes")
@@ -296,7 +296,7 @@ def cmd_context_scan(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps(res.to_dict(), indent=2))
     else:
-        print_header(title="USERSHIELD — CONTEXT FIREWALL SCAN", subtitle="Secret Scrubbing & Pre-Flight Token Sanitizer")
+        print_header(title="ZEROTRUSTZONE — CONTEXT FIREWALL SCAN", subtitle="Secret Scrubbing & Pre-Flight Token Sanitizer")
         print(f"Total Redactions : {res.redactions_count}")
         print(f"Payload Digest   : {res.digest_sha256}")
         if res.findings:
@@ -318,19 +318,19 @@ def cmd_context_scan(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="usershield",
+        prog="ztz",
         description=(
-            "🛡️ UserShield / ZTZ: Zero-Trust Cryptographic Pre-Flight Firewall\n\n"
+            "🛡️ ZeroTrustZone (ZTZ): Zero-Trust Cryptographic Pre-Flight Firewall\n\n"
             "Secures local AI inference by enforcing strict asymmetric cryptographic\n"
             "attestation on model weights and contexts before memory allocation."
         ),
-        epilog="Run 'usershield <command> --help' for detailed usage instructions.",
+        epilog="Run 'ztz <command> --help' for detailed usage instructions.",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # Init subparser
-    init_p = subparsers.add_parser("init", help="Initialize UserShield configuration, global trust store, and keypair")
+    init_p = subparsers.add_parser("init", help="Initialize ZeroTrustZone (ZTZ) configuration, global trust store, and keypair")
     init_p.add_argument("--force", action="store_true", help="Force re-generation of keys and config")
     init_p.add_argument("--type", choices=["ed25519", "rsa"], default="ed25519", help="Key algorithm (default: ed25519)")
     init_p.add_argument("--json", action="store_true", help="Output initialization status in JSON format")

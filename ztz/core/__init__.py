@@ -1,8 +1,8 @@
 from ztz.core.crypto import (
     ZTZSigner,
     ZTZVerifier,
-    UserShieldSigner,
-    UserShieldVerifier,
+    ZeroTrustZoneSigner,
+    ZeroTrustZoneVerifier,
     compute_file_sha256,
     generate_keypair,
 )
@@ -23,8 +23,8 @@ from ztz.core.model_manager import (
 __all__ = [
     "ZTZSigner",
     "ZTZVerifier",
-    "UserShieldSigner",
-    "UserShieldVerifier",
+    "ZeroTrustZoneSigner",
+    "ZeroTrustZoneVerifier",
     "compute_file_sha256",
     "generate_keypair",
     "TrustStore",

@@ -10,7 +10,7 @@ This project uses the following open-source software and libraries:
 ### aiohttp
 - **License**: Apache License 2.0
 - **Source**: [https://github.com/aio-libs/aiohttp](https://github.com/aio-libs/aiohttp)
-- **Description**: Asynchronous HTTP client/server framework for asyncio and Python. Used in UserShield's asynchronous networking layer.
+- **Description**: Asynchronous HTTP client/server framework for asyncio and Python. Used in ZeroTrustZone's asynchronous networking layer.
 
 ### pytest
 - **License**: MIT License

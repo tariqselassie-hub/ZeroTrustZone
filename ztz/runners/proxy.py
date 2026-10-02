@@ -153,18 +153,18 @@ class InferenceProxy:
             audit = ContextShield.seal_and_attest(body["prompt"])
             body["prompt"] = audit.clean_text
             redactions = audit.redactions_count
-            attestation_headers["X-UserShield-Digest"] = audit.digest_sha256
+            attestation_headers["X-ZTZ-Digest"] = audit.digest_sha256
             if audit.seal:
-                attestation_headers["X-UserShield-Enclave-Seal"] = audit.seal.mode
-                attestation_headers["X-UserShield-Enclave-Status"] = audit.seal.status
+                attestation_headers["X-ZTZ-Enclave-Seal"] = audit.seal.mode
+                attestation_headers["X-ZTZ-Enclave-Status"] = audit.seal.status
             if redactions > 0:
                 print(f"[\033[93mQUENCH\033[0m] Neutralized {redactions} secret(s) in prompt before inference.")
         elif "messages" in body and isinstance(body["messages"], list):
             clean_msgs, findings, total_redacted, seal = ContextShield.seal_messages(body["messages"])
             body["messages"] = clean_msgs
             redactions = total_redacted
-            attestation_headers["X-UserShield-Enclave-Seal"] = seal.mode
-            attestation_headers["X-UserShield-Enclave-Status"] = seal.status
+            attestation_headers["X-ZTZ-Enclave-Seal"] = seal.mode
+            attestation_headers["X-ZTZ-Enclave-Status"] = seal.status
             if redactions > 0:
                 print(f"[\033[93mQUENCH\033[0m] Neutralized {redactions} secret(s) across messages before inference.")
 

@@ -1,7 +1,7 @@
 """
 ZTZ Pre-Flight Context Firewall (core/context_shield.py)
 Zero-Trust context sanitization, secret scrubbing, and cryptographic pre-flight
-attestation before LLM ingestion (UserShield Project).
+attestation before LLM ingestion (ZeroTrustZone Project).
 """
 
 import re
@@ -218,7 +218,7 @@ class ContextShield:
         req = urllib.request.Request(
             endpoint,
             data=req_data,
-            headers={"Content-Type": "application/json", "User-Agent": "UserShield-Sentinel/2.0"},
+            headers={"Content-Type": "application/json", "User-Agent": "ZTZ-Sentinel/2.0"},
             method="POST"
         )
 
@@ -241,7 +241,7 @@ class ContextShield:
             pass
 
         # Sovereign Local Fallback
-        local_key = os.environ.get("USERSHIELD_SIGNING_KEY", "ZTZ_SOVEREIGN_ROOT_SECRET").encode("utf-8")
+        local_key = os.environ.get("ZTZ_SIGNING_KEY", "ZTZ_SOVEREIGN_ROOT_SECRET").encode("utf-8")
         local_mac = hmac.new(local_key, payload_digest.encode("utf-8"), hashlib.sha256).hexdigest()
         return EnclaveSeal(
             sealed=True,
