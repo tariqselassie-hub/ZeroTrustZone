@@ -147,8 +147,11 @@ def generate_keypair(
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    with open(priv_path, "wb") as f:
+    # Owner-only permissions from creation; never expose key bytes via a umask window.
+    fd = os.open(priv_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(priv_bytes)
+    os.chmod(priv_path, 0o600)  # enforce on pre-existing files too
 
     # Serialize public key
     pub_bytes = pub_key.public_bytes(

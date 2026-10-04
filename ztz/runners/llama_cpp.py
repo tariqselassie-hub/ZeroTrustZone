@@ -16,7 +16,6 @@ from ztz.ui.banners import (
     print_phase,
     print_audit_table,
     print_lockdown_banner,
-    print_lockdown_banner,
     print_summary_card,
 )
 
@@ -45,31 +44,68 @@ def _release_locks(locks: List[Any]):
             for fd in locks:
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
-        except:
+        except Exception:
             pass
+
+# Flags whose value is a file llama.cpp loads into memory (weights, adapters, context).
+# Every one of these must be attested, or it becomes an unverified side-loading channel.
+FILE_FLAGS = frozenset({
+    # Weights & adapters
+    "-m", "--model",
+    "-md", "--model-draft",
+    "-mv", "--model-vocoder",
+    "-mm", "--mmproj",
+    "--lora", "--lora-scaled",
+    "--control-vector", "--control-vector-scaled",
+    # Context payloads
+    "-f", "--file", "--prompt-file",
+    "-bf", "--binary-file",
+    "-sysf", "--system-prompt-file",
+    "--grammar-file",
+    "-jf", "--json-schema-file",
+    "--chat-template-file",
+})
+
+# Flags that make llama.cpp fetch weights from the network, bypassing local attestation.
+REMOTE_FLAGS = frozenset({
+    "-mu", "--model-url",
+    "-hf", "-hfr", "--hf-repo",
+    "-hff", "--hf-file",
+    "-hfd", "-hfrd", "--hf-repo-draft",
+    "-hfv", "-hfrv", "--hf-repo-v",
+    "-hffv", "--hf-file-v",
+    "-dr", "--docker-repo",
+    "--mmproj-url",
+})
+
+def _split_flag(arg: str):
+    if arg.startswith("--") and "=" in arg:
+        flag, value = arg.split("=", 1)
+        return flag, value
+    return arg, None
 
 def extract_target_files(args: List[str]) -> List[str]:
     """
-    Extracts candidate model and context files from llama.cpp CLI arguments.
-    Inspects flags like -m, --model, -f, --file, --prompt-file.
+    Extracts every file llama.cpp would load from its CLI arguments (see FILE_FLAGS).
+    Raises ValueError on argument injection or on remote-fetch flags (see REMOTE_FLAGS).
     """
     targets = []
     i = 0
     while i < len(args):
-        arg = args[i]
-        if arg in ("-m", "--model", "-f", "--file", "--prompt-file"):
-            if i + 1 < len(args):
-                target = args[i + 1]
-                if target.startswith("-"):
-                    raise ValueError(f"Argument Injection Detected: Expected file path, got flag '{target}'")
-                targets.append(target)
-                i += 2
-                continue
-        elif arg.startswith(("--model=", "--file=", "--prompt-file=")):
-            target = arg.split("=", 1)[1]
-            if target.startswith("-"):
-                raise ValueError(f"Argument Injection Detected: Expected file path, got flag '{target}'")
-            targets.append(target)
+        flag, value = _split_flag(args[i])
+        if flag in REMOTE_FLAGS:
+            raise ValueError(
+                f"Remote model fetch '{flag}' is forbidden: weights must be local and attested"
+            )
+        if flag in FILE_FLAGS:
+            if value is None:
+                if i + 1 >= len(args):
+                    raise ValueError(f"Flag '{flag}' is missing its file path")
+                value = args[i + 1]
+                i += 1
+            if value.startswith("-"):
+                raise ValueError(f"Argument Injection Detected: Expected file path, got flag '{value}'")
+            targets.append(value)
         i += 1
     return targets
 
@@ -92,7 +128,12 @@ def run_llama_protected(
         print(f"[ZTZ ERROR] Binary not found or not executable: {llama_bin}", file=sys.stderr)
         return 127
 
-    targets = extract_target_files(safe_args)
+    try:
+        targets = extract_target_files(safe_args)
+    except ValueError as e:
+        print_lockdown_banner(failed_target="<command line>", reason=str(e))
+        return 1
+
     if not targets:
         print("[ZTZ] No model (-m) or file (-f) arguments found in command.")
         print("[ZTZ] Direct execution allowed for non-file commands.\n")

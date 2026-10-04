@@ -149,7 +149,7 @@ def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
 
     return run_llama_protected(
         llama_bin=args.llama_bin,
-        passthrough_args=passthrough,
+        safe_args=passthrough,
         trust_store=trust_store,
         operating_mode=operating_mode,
         use_cache=not args.no_cache,
@@ -253,10 +253,12 @@ def cmd_cache(args: argparse.Namespace) -> int:
     return 1
 
 def cmd_service(args: argparse.Namespace) -> int:
-    if args.action == "install":
-        print("[SUCCESS] Installed ZTZ Proxy daemon to system services.")
-        return 0
-    return 1
+    print(
+        f"[ERROR] 'ztz service {args.action}' is not implemented yet. "
+        "Run 'ztz proxy' under your platform's service manager instead.",
+        file=sys.stderr,
+    )
+    return 2
 
 def cmd_inspect_model(args: argparse.Namespace) -> int:
     from ztz.core.model_inspector import ModelFormatInspector
@@ -360,10 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Run subparser
     run_p = subparsers.add_parser("run", help="Run llama-cli / llama.cpp with pre-flight protection")
-    run_p.add_argument("--llama-bin", default="./llama-cli", help="Path to llama-cli / llama.cpp binary")
-    run_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
-    run_p.add_argument("--license", default=None, help="Path to custom ztz.lic file")
-    run_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    _add_run_options(run_p)
 
     # Proxy subparser
     proxy_p = subparsers.add_parser("proxy", help="Start the Ollama/LM Studio reverse proxy interceptor")
@@ -406,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     cache_p.add_argument("action", choices=["clear"], help="Action to perform (e.g. clear)")
 
     # Service subparser
-    svc_p = subparsers.add_parser("service", help="Manage the ZTZ background daemon")
+    svc_p = subparsers.add_parser("service", help="Manage the ZTZ background daemon (not yet implemented)")
     svc_p.add_argument("action", choices=["install"], help="Action to perform")
 
     # Inspect-model subparser
@@ -422,11 +421,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
+def _add_run_options(p: argparse.ArgumentParser):
+    p.add_argument("--llama-bin", default="./llama-cli", help="Path to llama-cli / llama.cpp binary")
+    p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
+    p.add_argument("--license", default=None, help="Path to custom ztz.lic file")
+    p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+
+def build_run_parser() -> argparse.ArgumentParser:
+    """
+    Parser for `ztz run` passthrough mode. No -h and no prefix abbreviation, so
+    llama.cpp flags such as -hf or --lic... reach the pre-flight guard untouched.
+    """
+    p = argparse.ArgumentParser(prog="ztz run", add_help=False, allow_abbrev=False)
+    _add_run_options(p)
+    return p
+
 def main():
     parser = build_parser()
-    
+
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        args, passthrough = parser.parse_known_args()
+        args, passthrough = build_run_parser().parse_known_args(sys.argv[2:])
         sys.exit(cmd_run(args, passthrough))
     else:
         args = parser.parse_args()

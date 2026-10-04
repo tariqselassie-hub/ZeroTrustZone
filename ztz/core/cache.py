@@ -10,7 +10,7 @@ import sys
 import hmac
 import hashlib
 import pathlib
-from typing import Optional
+from typing import Callable, Optional
 from ztz.lic.fingerprint import HardwareFingerprint
 
 CACHE_DB_PATH = os.path.expanduser("~/.ztz/cache.db")
@@ -27,7 +27,8 @@ class AttestationCache:
             raise PermissionError(f"CRITICAL: Attestation cache path breached containment boundary: {self.db_path}")
             
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self.safe_conn = sqlite3.connect(self.db_path)
+        # Validation may run on a worker thread (e.g. the async proxy); callers serialize access.
+        self.safe_conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._set_pragmas()
         self._init_db()
         self.machine_key = HardwareFingerprint.compute_fingerprint().encode('utf-8')
@@ -60,11 +61,17 @@ class AttestationCache:
             return int(hashlib.sha256(normalized).hexdigest()[:14], 16)
         return None
 
-    def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo) -> str:
-        payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}".encode('utf-8')
+    def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo, binding="") -> str:
+        payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}:{binding}".encode('utf-8')
         return hmac.new(self.machine_key, payload, hashlib.sha256).hexdigest()
 
-    def get_cached_attestation(self, file_path: str):
+    def get_cached_attestation(self, file_path: str, binding_for: Optional[Callable[[str], Optional[str]]] = None):
+        """
+        Returns the cached attestation for file_path, or None on any miss.
+        binding_for(auth_key) must reproduce the binding passed to store_attestation
+        (e.g. a digest of the .sig and the authority's public key); returning None
+        means the authority is no longer trusted and forces a miss.
+        """
         if not os.path.exists(file_path):
             return None
             
@@ -86,8 +93,12 @@ class AttestationCache:
         if c_inode != inode or c_size != size or c_mtime_ns != mtime_ns:
             return None
             
+        binding = binding_for(c_auth_key) if binding_for else ""
+        if binding is None:
+            return None # Authority revoked or signature material changed
+
         # Verify the cryptographic signature of the cache row (Machine Binding + Anti-Tamper)
-        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo)
+        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo, binding)
         if not hmac.compare_digest(c_signature, expected_sig):
             return None # Tampered cache row
             
@@ -98,7 +109,7 @@ class AttestationCache:
             "error": None
         }
 
-    def store_attestation(self, file_path: str, auth_key: str, algo: str):
+    def store_attestation(self, file_path: str, auth_key: str, algo: str, binding: str = ""):
         if not os.path.exists(file_path):
             return
         stat = os.stat(file_path)
@@ -108,7 +119,7 @@ class AttestationCache:
         if inode is None:
             return # Don't cache unstable inodes
             
-        signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo)
+        signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo, binding)
         
         self.safe_conn.execute('''
             INSERT OR REPLACE INTO attestation_cache (file_path, inode, size, mtime_ns, auth_key, algo, signature)
