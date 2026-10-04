@@ -37,6 +37,34 @@ class TestZeroTrustZoneExports(unittest.TestCase):
         self.assertIsNotNone(run_diagnostics)
         self.assertIsNotNone(discover_ollama_models)
 
+    def test_alias_is_same_module_object(self):
+        """zerotrustzone.* must be the very same module objects as ztz.*, not copies."""
+        import ztz.core.crypto
+        import ztz.lic.manager
+        import zerotrustzone
+        import zerotrustzone.core.crypto
+        from zerotrustzone.lic import manager
+
+        self.assertIs(zerotrustzone.core.crypto, ztz.core.crypto)
+        self.assertIs(manager, ztz.lic.manager)
+        # Private helpers come through too (star-import shims dropped these).
+        self.assertIs(manager._canonical, ztz.lic.manager._canonical)
+        self.assertIs(zerotrustzone.sdk, __import__("ztz.sdk").sdk)
+
+    def test_alias_missing_attribute(self):
+        import zerotrustzone
+        with self.assertRaises(AttributeError):
+            zerotrustzone.does_not_exist
+        with self.assertRaises(ImportError):
+            import zerotrustzone.nope  # noqa: F401
+
+    def test_python_dash_m_entrypoint(self):
+        import subprocess, sys
+        out = subprocess.run([sys.executable, "-m", "zerotrustzone", "--help"],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ztz", out.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
