@@ -150,6 +150,30 @@ class TestPickleScanner(unittest.TestCase):
         self.assertEqual(rep.risk_level, "CRITICAL")
 
 
+class TestLocalTrustOptIn(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cwd = os.getcwd()
+        os.chdir(self.tmp)
+        generate_keypair(out_dir="./keys", name="planted")
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_cwd_keys_not_trusted_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ZTZ_TRUST_LOCAL", None)
+            ts = TrustStore()
+        self.assertNotIn("./keys", ts.search_paths)
+        self.assertIsNone(ts.get_authority("planted"))
+
+    def test_cwd_keys_trusted_when_opted_in(self):
+        with patch.dict(os.environ, {"ZTZ_TRUST_LOCAL": "1"}):
+            self.assertIsNotNone(TrustStore().get_authority("planted"))
+        self.assertIsNotNone(TrustStore(["./keys"]).get_authority("planted"))
+
+
 @unittest.skipIf(os.name == "nt", "POSIX permission bits")
 class TestKeyPermissions(unittest.TestCase):
     def test_private_key_owner_only(self):

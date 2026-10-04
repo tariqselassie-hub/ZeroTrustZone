@@ -19,7 +19,7 @@ ztz init
 ### `ztz doctor`
 Runs comprehensive system health, runtime connectivity, and cryptographic security diagnostics.
 - Checks Python environment & OpenSSL/Cryptography acceleration.
-- Validates trust stores and loaded authority keys (`./keys`, `~/.ztz/keys`).
+- Validates trust stores and loaded authority keys (`~/.ztz/keys`, `~/.zerotrustzone/keys`, `~/.ztz/trusted_keys`; plus `./keys` when `ZTZ_TRUST_LOCAL=1`).
 - Probes local Ollama / LM Studio daemons and storage directories.
 - Reports Attestation Cache metrics and Context Shield secret inspection rules.
 - `--json`: Output full health diagnostics report in JSON format.
@@ -76,7 +76,7 @@ ztz sign models/qwen2.5-7b.gguf
 ### `ztz verify <file>`
 Verifies a target file against its detached signature offline before memory allocation.
 - `--sig`: Custom path to detached `.sig` (defaults to `<file>.sig`).
-- `--trust-store`: Directory containing trusted public keys (cascades automatically across `./keys` and `~/.ztz/keys`).
+- `--trust-store`: Directory containing trusted public keys (defaults to the home trust roots under `~/.ztz`; `./keys` is only trusted when passed explicitly or with `ZTZ_TRUST_LOCAL=1`).
 - `--no-cache`: Bypass the machine-bound instant attestation cache.
 - `--json`: Output verification row in JSON format.
 

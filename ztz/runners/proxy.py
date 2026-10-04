@@ -250,7 +250,7 @@ class InferenceProxy:
     async def passthrough(self, request: web.Request) -> web.Response:
         return await self._proxy_request(request)
 
-def run_proxy(host: str = "127.0.0.1", port: int = 11434, upstream_port: int = 11435, trust_store_path: str = "./keys", use_cache: bool = True):
+def run_proxy(host: str = "127.0.0.1", port: int = 11434, upstream_port: int = 11435, trust_store_path: str = None, use_cache: bool = True):
     trust_store = TrustStore([trust_store_path] if trust_store_path else None)
     proxy = InferenceProxy(trust_store, upstream_port=upstream_port, use_cache=use_cache)
     

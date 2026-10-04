@@ -12,7 +12,18 @@ DEFAULT_ZTZ_STORE = os.path.expanduser("~/.ztz/keys")
 DEFAULT_ZEROTRUSTZONE_STORE = os.path.expanduser("~/.zerotrustzone/keys")
 DEFAULT_USER_STORE = os.path.expanduser("~/.ztz/trusted_keys")
 DEFAULT_LOCAL_STORE = "./keys"
-DEFAULT_SEARCH_PATHS = [DEFAULT_LOCAL_STORE, DEFAULT_ZTZ_STORE, DEFAULT_ZEROTRUSTZONE_STORE, DEFAULT_USER_STORE]
+# Trusted roots come only from the user's home by default. ./keys is relative to the
+# current folder, so trusting it implicitly would let any downloaded model directory
+# ship its own "trusted" key. Opt in with --trust-store ./keys or ZTZ_TRUST_LOCAL=1.
+DEFAULT_SEARCH_PATHS = [DEFAULT_ZTZ_STORE, DEFAULT_ZEROTRUSTZONE_STORE, DEFAULT_USER_STORE]
+TRUST_LOCAL_ENV = "ZTZ_TRUST_LOCAL"
+
+def default_search_paths() -> List[str]:
+    """Returns the default trust roots, prepending ./keys only when ZTZ_TRUST_LOCAL=1."""
+    paths = list(DEFAULT_SEARCH_PATHS)
+    if os.environ.get(TRUST_LOCAL_ENV) == "1":
+        paths.insert(0, DEFAULT_LOCAL_STORE)
+    return paths
 
 def get_default_key_dir() -> str:
     """Returns the primary directory for storing keys (~/.ztz/keys)."""
@@ -47,14 +58,14 @@ def find_private_key(preferred_path: str = None, name: str = "authority") -> str
 class TrustStore:
     def __init__(self, search_paths: List[str] = None):
         if search_paths is None:
-            self.search_paths = list(DEFAULT_SEARCH_PATHS)
+            self.search_paths = default_search_paths()
         elif isinstance(search_paths, str):
             self.search_paths = [search_paths]
         else:
             # Filter out None and ensure fallback paths are available if specified paths don't exist
             filtered = [p for p in search_paths if p]
             if not filtered:
-                self.search_paths = list(DEFAULT_SEARCH_PATHS)
+                self.search_paths = default_search_paths()
             else:
                 self.search_paths = filtered
         self.authorities: Dict[str, Any] = {}

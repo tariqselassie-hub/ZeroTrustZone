@@ -10,12 +10,13 @@ from ztz.sdk.exceptions import UntrustedPayloadError
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
 
-def guard(trust_store: str = "./keys", targets: List[str] = None):
+def guard(trust_store: str = None, targets: List[str] = None):
     """
     ZTZ Pre-Flight Firewall Decorator.
     
     Intercepts function arguments specified in `targets`, validates their 
-    cryptographic signatures against the provided `trust_store`, and raises an 
+    cryptographic signatures against the provided `trust_store` (default: the home
+    trust roots, see ztz.core.trust_store.default_search_paths), and raises an
     UntrustedPayloadError if they fail attestation.
     """
     if targets is None:
