@@ -22,10 +22,10 @@ ZTZ intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtimes) **b
 ## Key Invariants
 
 1. **Pre-Memory Quarantine**: Runs mathematically strictly before `llama.cpp` or Ollama allocates tensors. If verification fails, pointers are never created and execution halts instantly.
-2. **Anti-TOCTOU File Locking**: Acquires mandatory OS-level shared locks (`fcntl`) before reading metadata to prevent race conditions where malicious processes swap files post-verification.
+2. **Anti-TOCTOU File Locking**: On Linux/macOS, `ztz run` takes advisory shared locks (`flock`) on every input file before verification and holds them until the runtime has launched, narrowing the window for swapping files post-verification. (Advisory locks only stop processes that also lock; Windows has no equivalent yet.)
 3. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
 4. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
-5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache cryptographically bound to your hardware fingerprint via HMAC, reducing 30-second verification times to <50ms.
+5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
 
 ---
 
@@ -73,6 +73,8 @@ ztz init
 ```
 Automatically provisions your root authority keypair (`authority_priv.pem` and `authority_pub.pem`) and installs the global trust store in `~/.ztz/keys`. ZTZ now works seamlessly across any folder.
 
+> **Trust roots:** by default ZTZ trusts public keys only from `~/.ztz/keys`, `~/.zerotrustzone/keys` and `~/.ztz/trusted_keys`. A `./keys` folder in the current directory is **not** trusted automatically (a downloaded model folder could ship its own key). Opt in per command with `--trust-store ./keys`, or globally with `ZTZ_TRUST_LOCAL=1`.
+
 ### 2. Verify System Health & Runtime Diagnostics
 ```bash
 ztz doctor
@@ -101,7 +103,7 @@ To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their
 ```bash
 ztz proxy --port 11434 --upstream-port 11435
 ```
-ZTZ transparently intercepts incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime.
+ZTZ transparently intercepts incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime. Prompts and chat messages are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
 
 ### 6. Run `llama.cpp` under Pre-Flight Protection
 ```bash
@@ -109,10 +111,12 @@ ztz run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f pro
 ```
 If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical lockdown banner before `llama-cli` starts.
 
+Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (`--lora`, `--lora-scaled`), draft/vocoder models (`-md`, `-mv`), multimodal projectors (`--mmproj`), control vectors, and context files (`--system-prompt-file`, `--grammar-file`, `--json-schema-file`, `--chat-template-file`, `-bf`). Flags that download weights at runtime (`-hf`, `-hff`, `-mu`, `--docker-repo`, `--mmproj-url`, …) are refused outright. All other arguments, including `--help`, are passed straight to the llama binary.
+
 ### 7. Pre-Flight Context Scanning & Secret Scrubbing
-Neutralize credentials, API keys (OpenAI, Anthropic, AWS, GitHub), and SSH/PGP private keys before feeding prompts into inference engines:
+Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), `sk-` API keys, GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments:
 ```bash
-ztz context-scan "Analyze this deployment with sk-ant-api03-..." --out sanitized_prompt.txt
+ztz context-scan "Deploy with AWS key AKIAIOSFODNN7EXAMPLE" --out sanitized_prompt.txt
 cat confidential_prompt.txt | ztz context-scan - --json
 ```
 
@@ -126,28 +130,47 @@ ztz cache clear
 
 ## Python SDK & Dual-Namespace Support
 
-ZeroTrustZone can be imported interchangeably as `zerotrustzone` or `ztz`:
+ZeroTrustZone can be imported interchangeably as `zerotrustzone` or `ztz`. Both names resolve to the same modules, so `zerotrustzone.core.crypto is ztz.core.crypto`.
 
 ```python
-# Import via zerotrustzone namespace
-from zerotrustzone.core import PreFlightValidator, ContextShield, ModelFormatInspector
-from zerotrustzone.core.crypto import ZTZSigner, ZTZVerifier
+from ztz.core import TrustStore, PreFlightValidator, ContextShield, ModelFormatInspector
 
 # Inspect weights container
 verdict = ModelFormatInspector.inspect("models/weights.gguf")
-print(f"Format: {verdict.format}, Low Risk: {verdict.is_safe_format}")
+print(f"Format: {verdict.format}, Safe container: {verdict.is_safe_format}, Risk: {verdict.risk_level}")
 
 # Sanitize context and prompts
 result = ContextShield.sanitize("System prompt containing confidential tokens...")
 clean_prompt = result.clean_text
 
 # Pre-flight validate model and context before inference
-validator = PreFlightValidator(trust_store_dir="./keys", enforce_all=True)
-audit = validator.validate_bundle(
-    model_path="models/weights.gguf",
-    context_paths=["prompts/system.txt"]
-)
-assert audit.all_passed, "Quarantined! Untrusted model or context detected."
+trust_store = TrustStore()  # home trust roots; or TrustStore(["/path/to/keys"])
+with PreFlightValidator(trust_store) as validator:
+    all_clean, rows, elapsed = validator.audit_batch([
+        "models/weights.gguf",
+        "prompts/system.txt",
+    ])
+for row in rows:
+    print(row["resource"], row["status"], row["error"] or "")
+assert all_clean, "Quarantined! Untrusted model or context detected."
+```
+
+Each row's `status` is `VERIFIED` / `VERIFIED_CACHE` on success, or one of `MISSING`, `UNSAFE_FORMAT`, `NO_SIG`, `NO_ROOTS`, `TAMPERED`.
+
+Guard a function so its file arguments must be attested before it runs:
+
+```python
+import ztz
+from ztz.sdk.exceptions import UntrustedPayloadError
+
+@ztz.guard(targets=["model_path", "context_path"])
+def load(model_path: str, context_path: str):
+    ...
+
+try:
+    load("models/weights.gguf", "prompts/system.txt")
+except UntrustedPayloadError as e:
+    print(e)
 ```
 
 ---
