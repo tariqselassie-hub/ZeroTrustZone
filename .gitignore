@@ -42,3 +42,9 @@ models/
 *.safetensors
 *.pt
 *.bin
+
+# Build output (Nuitka / PyInstaller); publish binaries via Releases, not git
+*.exe
+cli.dist/
+cli.build/
+cli.onefile-build/
