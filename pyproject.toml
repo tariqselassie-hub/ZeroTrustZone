@@ -47,3 +47,6 @@ ztz-lic = "ztz.cli:license_cli"
 where = ["."]
 include = ["ztz*", "zerotrustzone*"]
 
+[tool.setuptools.package-data]
+"ztz.lic" = ["vendor_pub.pem"]
+
