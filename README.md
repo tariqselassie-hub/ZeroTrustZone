@@ -114,7 +114,7 @@ If any input file lacks a valid `.sig` or has been tampered with by even a singl
 Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (`--lora`, `--lora-scaled`), draft/vocoder models (`-md`, `-mv`), multimodal projectors (`--mmproj`), control vectors, and context files (`--system-prompt-file`, `--grammar-file`, `--json-schema-file`, `--chat-template-file`, `-bf`). Flags that download weights at runtime (`-hf`, `-hff`, `-mu`, `--docker-repo`, `--mmproj-url`, …) are refused outright. All other arguments, including `--help`, are passed straight to the llama binary.
 
 ### 7. Pre-Flight Context Scanning & Secret Scrubbing
-Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), `sk-` API keys, GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments:
+Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), OpenAI and Anthropic API keys (including long `sk-proj-` / `sk-ant-api03-` keys, always masked in full), GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments:
 ```bash
 ztz context-scan "Deploy with AWS key AKIAIOSFODNN7EXAMPLE" --out sanitized_prompt.txt
 cat confidential_prompt.txt | ztz context-scan - --json

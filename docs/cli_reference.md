@@ -127,7 +127,7 @@ Scans text strings, prompt files, or standard input (`-`) for leaked API keys, t
 - `--json`: Emit audit findings and SHA-256 digest in JSON format.
 
 ```bash
-ztz context-scan "Run prompt with sk-ant-api03-..." --out clean.txt
+ztz context-scan "Run prompt with AWS key AKIAIOSFODNN7EXAMPLE" --out clean.txt
 cat confidential_prompt.txt | ztz context-scan - --json
 ```
 

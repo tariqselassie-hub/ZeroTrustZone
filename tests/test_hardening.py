@@ -150,6 +150,45 @@ class TestPickleScanner(unittest.TestCase):
         self.assertEqual(rep.risk_level, "CRITICAL")
 
 
+class TestLongApiKeyRedaction(unittest.TestCase):
+    """Long modern keys must be masked whole; a partial mask leaks the remainder."""
+
+    @staticmethod
+    def _body(n):
+        # Mixed alphabet with '-' and '_' so word boundaries occur inside the key.
+        alphabet = "Ab3d_e-F9xQ"
+        return "".join(alphabet[i % len(alphabet)] for i in range(n))
+
+    def _assert_fully_masked(self, key, category):
+        from ztz.core.context_shield import ContextShield
+        res = ContextShield.sanitize(f"use {key} now")
+        self.assertEqual(res.clean_text, f"use [ZTZ_QUENCHED:{category}] now")
+        self.assertEqual(res.redactions_count, 1)
+
+    def test_openai_project_key(self):
+        self._assert_fully_masked("sk-proj-" + self._body(156), "OPENAI_API_KEY")
+
+    def test_openai_service_account_key(self):
+        self._assert_fully_masked("sk-svcacct-" + self._body(150), "OPENAI_API_KEY")
+
+    def test_openai_legacy_key(self):
+        self._assert_fully_masked("sk-" + "a1B2c3D4e5" * 4 + "f6G7h8J9", "OPENAI_API_KEY")
+
+    def test_anthropic_api_key(self):
+        self._assert_fully_masked("sk-ant-api03-" + self._body(95), "ANTHROPIC_API_KEY")
+
+    def test_anthropic_key_without_internal_dashes(self):
+        self._assert_fully_masked("sk-ant-api03-" + "Ab3_" * 23 + "xyzAA", "ANTHROPIC_API_KEY")
+
+    def test_anthropic_admin_key(self):
+        self._assert_fully_masked("sk-ant-admin01-" + self._body(93), "ANTHROPIC_API_KEY")
+
+    def test_no_false_positive_inside_words(self):
+        from ztz.core.context_shield import ContextShield
+        text = "run task-" + "a" * 30 + " and disk-" + "b" * 30
+        self.assertEqual(ContextShield.sanitize(text).redactions_count, 0)
+
+
 class TestLocalTrustOptIn(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

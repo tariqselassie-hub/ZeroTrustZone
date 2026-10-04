@@ -19,10 +19,18 @@ SECRET_PATTERNS = [
             re.IGNORECASE
         )
     ),
-    # OpenAI API Keys
+    # Anthropic API / Admin Keys (sk-ant-api03-..., sk-ant-admin01-...).
+    # Must precede the generic sk- rule so these are labelled correctly.
+    # Key-body rules are greedy with no upper bound: a length cap plus a trailing \b
+    # would stop at an internal '-' and leave the remainder of a long key unmasked.
+    (
+        "ANTHROPIC_API_KEY",
+        re.compile(r"\bsk-ant-[a-z]+\d*-[A-Za-z0-9_-]{20,}")
+    ),
+    # OpenAI API Keys (legacy sk-..., project sk-proj-..., service account sk-svcacct-...)
     (
         "OPENAI_API_KEY",
-        re.compile(r"\bsk-[a-zA-Z0-9_-]{24,64}\b")
+        re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")
     ),
     # GitHub Personal Access / OAuth Tokens
     (
