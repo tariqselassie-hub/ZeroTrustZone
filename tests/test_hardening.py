@@ -259,6 +259,31 @@ class TestLicenseEnforcement(unittest.TestCase):
         ok, _, _ = LicenseManager(custom_lic_path=lic).verify_license()
         self.assertFalse(ok)
 
+    def test_issue_with_encrypted_vendor_key(self):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from ztz import cli
+        from ztz.lic.fingerprint import HardwareFingerprint
+        from ztz.lic.manager import LicenseManager
+        vendor = ed25519.Ed25519PrivateKey.generate()
+        key = os.path.join(self.tmp, "vendor_priv.pem")
+        with open(key, "wb") as f:
+            f.write(vendor.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                serialization.BestAvailableEncryption(b"correct horse"),
+            ))
+        lic = os.path.join(self.tmp, "issued.lic")
+        argv = ["ztz", "license", "issue", "--fingerprint", HardwareFingerprint.compute_fingerprint(),
+                "--vendor-key", key, "--out", lic]
+        for passphrase, expected in (("wrong", 1), ("correct horse", 0)):
+            with patch.object(sys, "argv", argv), \
+                 patch.dict(os.environ, {"ZTZ_VENDOR_KEY_PASSPHRASE": passphrase}), \
+                 self.assertRaises(SystemExit) as cm:
+                cli.main()
+            self.assertEqual(cm.exception.code, expected)
+        ok, _, _ = LicenseManager(vendor.public_key(), custom_lic_path=lic).verify_license()
+        self.assertTrue(ok)
+
 
 @unittest.skipIf(os.name == "nt", "POSIX permission bits")
 class TestKeyPermissions(unittest.TestCase):

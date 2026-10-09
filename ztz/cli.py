@@ -241,7 +241,13 @@ def cmd_license_issue(args: argparse.Namespace) -> int:
     key_path = args.vendor_key or DEFAULT_VENDOR_PRIV_KEY_PATH
     try:
         with open(key_path, "rb") as kf:
-            vendor_priv = serialization.load_pem_private_key(kf.read(), password=None)
+            pem = kf.read()
+        try:
+            vendor_priv = serialization.load_pem_private_key(pem, password=None)
+        except TypeError:
+            import getpass
+            passphrase = os.environ.get("ZTZ_VENDOR_KEY_PASSPHRASE") or getpass.getpass("Vendor key passphrase: ")
+            vendor_priv = serialization.load_pem_private_key(pem, password=passphrase.encode("utf-8"))
     except Exception as e:
         print(f"[ERROR] Could not load vendor private key '{key_path}': {e}", file=sys.stderr)
         return 1
