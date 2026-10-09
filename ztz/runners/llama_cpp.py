@@ -8,9 +8,10 @@ import os
 import sys
 import shutil
 import subprocess
-from typing import List, Any
+from typing import List
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
+from ztz.core.file_pin import pin_files, unpin_files
 from ztz.ui.banners import (
     print_header,
     print_phase,
@@ -18,34 +19,6 @@ from ztz.ui.banners import (
     print_lockdown_banner,
     print_summary_card,
 )
-
-def _acquire_locks(targets: List[str]) -> List[Any]:
-    locks = []
-    if os.name != 'nt':
-        import fcntl
-        for t in targets:
-            if os.path.exists(t):
-                fd = None
-                try:
-                    # CWE-775: Open without O_CLOEXEC to hold lock in parent.
-                    # close_fds=True in Popen ensures the child does not inherit it.
-                    fd = os.open(t, os.O_RDONLY)  # karnak: ignore
-                    fcntl.flock(fd, fcntl.LOCK_SH)
-                    locks.append(fd)
-                except Exception:
-                    if fd is not None:
-                        os.close(fd)
-    return locks
-
-def _release_locks(locks: List[Any]):
-    if os.name != 'nt':
-        try:
-            import fcntl
-            for fd in locks:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-                os.close(fd)
-        except Exception:
-            pass
 
 # Flags whose value is a file llama.cpp loads into memory (weights, adapters, context).
 # Every one of these must be attested, or it becomes an unverified side-loading channel.
@@ -141,8 +114,16 @@ def run_llama_protected(
         # Explicit shell=False to satisfy taint algebra projection
         return subprocess.run(cmd, check=False, shell=False, close_fds=True).returncode  # karnak: ignore
 
-    # TOCTOU Protection: Acquire shared locks before validation
-    locks = _acquire_locks(targets)
+    # TOCTOU Protection: pin files before validation, hold until the runtime exits
+    try:
+        pins = pin_files(targets)
+    except OSError as e:
+        print_lockdown_banner(
+            failed_target=e.filename or "<unknown>",
+            reason=f"LOCK_FAILED: cannot pin file against modification ({e.strerror}). "
+                   "Another process may have it open for writing.",
+        )
+        return 1
     try:
         validator = PreFlightValidator(trust_store, use_cache=use_cache)
         all_clean, rows, elapsed = validator.audit_batch(targets)
@@ -189,5 +170,4 @@ def run_llama_protected(
         print(f"\n[ZTZ ERROR] Target inference binary not found: {llama_bin}", file=sys.stderr)
         return 127
     finally:
-        # Release locks after the subprocess has safely launched and acquired its own handles
-        _release_locks(locks)
+        unpin_files(pins)

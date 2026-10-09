@@ -22,7 +22,9 @@ ZTZ intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtimes) **b
 ## Key Invariants
 
 1. **Pre-Memory Quarantine**: Runs mathematically strictly before `llama.cpp` or Ollama allocates tensors. If verification fails, pointers are never created and execution halts instantly.
-2. **Anti-TOCTOU File Locking**: On Linux/macOS, `ztz run` takes advisory shared locks (`flock`) on every input file before verification and holds them until the runtime has launched, narrowing the window for swapping files post-verification. (Advisory locks only stop processes that also lock; Windows has no equivalent yet.)
+2. **Anti-TOCTOU File Pinning**: `ztz run` and the SDK's `attested` / `@guard` pin every input file *before* verification and hold it until the runtime exits (or the SDK block ends), so the bytes loaded are the bytes attested.
+   - **Windows**: mandatory. Files are opened read-share-only, so the OS refuses any other process's attempt to write, rename or delete them. If another process already has a file open for writing, ZTZ aborts instead of verifying.
+   - **Linux/macOS**: advisory shared `flock`. This only stops processes that also take locks.
 3. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
 4. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
 5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
