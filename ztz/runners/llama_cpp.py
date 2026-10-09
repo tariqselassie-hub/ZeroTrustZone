@@ -5,13 +5,15 @@ and halts execution before process memory allocation if invariants are violated.
 """
 
 import os
+import re
 import sys
 import shutil
 import subprocess
-from typing import Dict, Iterator, List, Tuple
+import tempfile
+from typing import Dict, Iterator, List, Optional, Tuple
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
-from ztz.core.file_pin import changed_files, load_paths, pass_fds, pin_files, unpin_files
+from ztz.core.file_pin import FD_BINDING, changed_files, load_paths, pass_fds, pin_files, unpin_files
 from ztz.ui.banners import (
     print_header,
     print_phase,
@@ -97,6 +99,56 @@ def bind_target_files(args: List[str], mapping: Dict[str, str]) -> List[str]:
         bound[i] = f"{flag}={new}" if inline else new
     return bound
 
+# llama.cpp only loads sibling shards when the given path is the first split,
+# named exactly <prefix>-00001-of-NNNNN.gguf (llama_split_prefix), and then opens
+# <prefix>-0000i-of-NNNNN.gguf by name.
+_SPLIT_HEAD = re.compile(r"^(?P<prefix>.+)-00001-of-(?P<count>\d{5})\.gguf$")
+
+def split_shards(path: str) -> List[str]:
+    """All shards llama.cpp would load for path (just [path] if it is not a split head)."""
+    m = _SPLIT_HEAD.match(path)
+    if not m or int(m["count"]) < 2:
+        return [path]
+    count = int(m["count"])
+    return [f"{m['prefix']}-{i:05d}-of-{count:05d}.gguf" for i in range(1, count + 1)]
+
+def expand_split_targets(targets: List[str]) -> List[str]:
+    """targets plus every sibling shard of split GGUF heads, in order, without duplicates."""
+    return list(dict.fromkeys(s for t in targets for s in split_shards(t)))
+
+def _link_split_shards(targets: List[str], bound: Dict[str, str]) -> Tuple[Optional[str], Dict[str, str]]:
+    """
+    Linux: the runtime gets /proc/self/fd/N paths, which carry no shard name, so
+    llama.cpp could not find a split model's siblings. For each split head, build a
+    private directory of symlinks named like the shards, each pointing at its
+    pinned descriptor, and point the head's argument at it (updates bound in place).
+    Returns (directory to remove after the run or None, {symlink: descriptor path}).
+
+    Residual risk: a process running as the same user can still replace these
+    symlinks between the pre-launch check and llama.cpp opening the shards.
+    """
+    heads = [t for t in dict.fromkeys(targets) if len(split_shards(t)) > 1]
+    if not FD_BINDING or not heads:
+        return None, {}
+    root = tempfile.mkdtemp(prefix="ztz-split-")  # 0700
+    links = {}
+    for n, head in enumerate(heads):
+        group = os.path.join(root, str(n))
+        os.mkdir(group, 0o700)
+        for shard in split_shards(head):
+            link = os.path.join(group, os.path.basename(shard))
+            os.symlink(bound[shard], link)
+            links[link] = bound[shard]
+        bound[head] = os.path.join(group, os.path.basename(head))
+    return root, links
+
+def _split_links_intact(links: Dict[str, str]) -> bool:
+    """True if every shard symlink still points at its own pinned descriptor."""
+    try:
+        return all(os.readlink(link) == target for link, target in links.items())
+    except OSError:
+        return False
+
 def run_llama_protected(
     llama_bin: str,
     safe_args: List[str],
@@ -128,9 +180,12 @@ def run_llama_protected(
         # Explicit shell=False to satisfy taint algebra projection
         return subprocess.run(cmd, check=False, shell=False, close_fds=True).returncode  # karnak: ignore
 
+    # Sibling shards of a split GGUF are loaded too, so they are attested and pinned too.
+    files = expand_split_targets(targets)
+
     # TOCTOU Protection: pin files before validation, hold until the runtime exits
     try:
-        pins = pin_files(targets)
+        pins = pin_files(files)
     except OSError as e:
         print_lockdown_banner(
             failed_target=e.filename or "<unknown>",
@@ -138,10 +193,11 @@ def run_llama_protected(
                    "Another process may have it open for writing.",
         )
         return 1
+    split_dir = None
     try:
         bound = load_paths(pins)
         with PreFlightValidator(trust_store, use_cache=use_cache) as validator:
-            all_clean, rows, elapsed = validator.audit_batch(targets, read_paths=bound)
+            all_clean, rows, elapsed = validator.audit_batch(files, read_paths=bound)
 
         # Print the structured Unicode audit table
         print_audit_table(rows)
@@ -173,16 +229,19 @@ def run_llama_protected(
             duration_sec=elapsed,
         )
 
+        split_dir, split_links = _link_split_shards(targets, bound)
+
         changed = changed_files(pins)
-        if changed:
+        if changed or not _split_links_intact(split_links):
             print_lockdown_banner(
-                failed_target=changed[0],
+                failed_target=changed[0] if changed else split_dir,
                 reason="MODIFIED_AFTER_PIN: file changed or was replaced during verification",
             )
             return 1
 
         print_phase(2, f"Passing Execution to Runtime Binary: {os.path.basename(safe_bin)}")
-        # Linux: the runtime opens the verified descriptors (/proc/self/fd/N), not the paths.
+        # Linux: the runtime opens the verified descriptors (/proc/self/fd/N), not the paths;
+        # split heads point into split_dir, whose shard-named symlinks lead to the descriptors.
         cmd = [safe_bin] + bind_target_files(safe_args, bound)
 
         proc = subprocess.Popen(cmd, shell=False, close_fds=True, pass_fds=pass_fds(pins))
@@ -192,4 +251,6 @@ def run_llama_protected(
         print(f"\n[ZTZ ERROR] Target inference binary not found: {llama_bin}", file=sys.stderr)
         return 127
     finally:
+        if split_dir:
+            shutil.rmtree(split_dir, ignore_errors=True)
         unpin_files(pins)

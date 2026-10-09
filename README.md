@@ -116,6 +116,8 @@ If any input file lacks a valid `.sig` or has been tampered with by even a singl
 
 Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (`--lora`, `--lora-scaled`), draft/vocoder models (`-md`, `-mv`), multimodal projectors (`--mmproj`), control vectors, and context files (`--system-prompt-file`, `--grammar-file`, `--json-schema-file`, `--chat-template-file`, `-bf`). Flags that download weights at runtime (`-hf`, `-hff`, `-mu`, `--docker-repo`, `--mmproj-url`, …) are refused outright. All other arguments, including `--help`, are passed straight to the llama binary.
 
+Split GGUF models are covered too: for `-m model-00001-of-00003.gguf`, every shard llama.cpp would load (`-00002-of-00003`, `-00003-of-00003`) must be present and carry its own valid `.sig` (sign each shard with `ztz sign`), and all of them are pinned. On Linux, llama.cpp reaches the shards through a private directory of shard-named symlinks to the pinned descriptors; ZTZ re-checks those links just before launch, but a process running as the same user could still swap them in the moment before llama.cpp opens the shards.
+
 ### 7. Pre-Flight Context Scanning & Secret Scrubbing
 Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), OpenAI and Anthropic API keys (including long `sk-proj-` / `sk-ant-api03-` keys, always masked in full), GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments:
 ```bash

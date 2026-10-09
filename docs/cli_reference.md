@@ -89,7 +89,11 @@ ztz verify models/qwen2.5-7b.gguf
 ### `ztz run`
 Executes an AI runtime binary (`llama-cli` / `llama.cpp`) inside the ZTZ pre-flight quarantine boundary.
 - `--llama-bin`: Path to the underlying runtime binary (e.g., `./llama-cli`).
-- Automatically intercepts `-m`/`--model` and `-f`/`--file` arguments and halts process startup if attestation fails.
+- `--trust-store`: Public key directory (default: the home trust roots).
+- `--no-cache`: Bypass the attestation cache and stream-hash every file.
+- Attests every file llama.cpp would load (`-m`, `-f`, `--lora`, `-md`, `--mmproj`, `--system-prompt-file`, `--grammar-file`, …) and halts process startup if any fails. Remote-fetch flags (`-hf`, `-mu`, …) are refused.
+- Split GGUF models (`-m model-00001-of-00003.gguf`): every shard must be present and signed; all are attested and pinned.
+- Inputs are pinned before verification and held until the runtime exits (see the README's *Anti-TOCTOU File Pinning*).
 
 ```bash
 ztz run --llama-bin ./llama-cli -m model.gguf -f prompt.txt
