@@ -249,6 +249,13 @@ class ContextShield:
         import urllib.request
         import urllib.error
 
+        def _enclave_headers():
+            h = {"Content-Type": "application/json", "User-Agent": "ZTZ-Sentinel/2.0"}
+            token = os.environ.get("ENCLAVE_API_TOKEN", "").strip()
+            if token:
+                h["Authorization"] = f"Bearer {token}"
+            return h
+
         base_url = enclave_url or os.environ.get("ZTZ_ENCLAVE_URL", "http://127.0.0.1:5555")
         endpoint = f"{base_url.rstrip('/')}/api/dsa/sign"
         
@@ -261,7 +268,7 @@ class ContextShield:
         req = urllib.request.Request(
             endpoint,
             data=req_data,
-            headers={"Content-Type": "application/json", "User-Agent": "ZTZ-Sentinel/2.0"},
+            headers=_enclave_headers(),
             method="POST"
         )
 
