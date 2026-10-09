@@ -8,10 +8,10 @@ import os
 import sys
 import shutil
 import subprocess
-from typing import List
+from typing import Dict, Iterator, List, Tuple
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
-from ztz.core.file_pin import pin_files, unpin_files
+from ztz.core.file_pin import changed_files, load_paths, pass_fds, pin_files, unpin_files
 from ztz.ui.banners import (
     print_header,
     print_phase,
@@ -57,12 +57,12 @@ def _split_flag(arg: str):
         return flag, value
     return arg, None
 
-def extract_target_files(args: List[str]) -> List[str]:
+def _iter_file_args(args: List[str]) -> Iterator[Tuple[int, str, str, bool]]:
     """
-    Extracts every file llama.cpp would load from its CLI arguments (see FILE_FLAGS).
+    Yields (index, flag, path, inline) for every file argument; inline means
+    args[index] is '--flag=path', otherwise args[index] is the path itself.
     Raises ValueError on argument injection or on remote-fetch flags (see REMOTE_FLAGS).
     """
-    targets = []
     i = 0
     while i < len(args):
         flag, value = _split_flag(args[i])
@@ -71,16 +71,31 @@ def extract_target_files(args: List[str]) -> List[str]:
                 f"Remote model fetch '{flag}' is forbidden: weights must be local and attested"
             )
         if flag in FILE_FLAGS:
-            if value is None:
+            inline = value is not None
+            if not inline:
                 if i + 1 >= len(args):
                     raise ValueError(f"Flag '{flag}' is missing its file path")
                 value = args[i + 1]
                 i += 1
             if value.startswith("-"):
                 raise ValueError(f"Argument Injection Detected: Expected file path, got flag '{value}'")
-            targets.append(value)
+            yield i, flag, value, inline
         i += 1
-    return targets
+
+def extract_target_files(args: List[str]) -> List[str]:
+    """
+    Extracts every file llama.cpp would load from its CLI arguments (see FILE_FLAGS).
+    Raises ValueError on argument injection or on remote-fetch flags (see REMOTE_FLAGS).
+    """
+    return [path for _, _, path, _ in _iter_file_args(args)]
+
+def bind_target_files(args: List[str], mapping: Dict[str, str]) -> List[str]:
+    """Returns a copy of args with every file argument replaced by mapping[path]."""
+    bound = list(args)
+    for i, flag, path, inline in _iter_file_args(args):
+        new = mapping.get(path, path)
+        bound[i] = f"{flag}={new}" if inline else new
+    return bound
 
 def run_llama_protected(
     llama_bin: str,
@@ -125,8 +140,9 @@ def run_llama_protected(
         )
         return 1
     try:
-        validator = PreFlightValidator(trust_store, use_cache=use_cache)
-        all_clean, rows, elapsed = validator.audit_batch(targets)
+        bound = load_paths(pins)
+        with PreFlightValidator(trust_store, use_cache=use_cache) as validator:
+            all_clean, rows, elapsed = validator.audit_batch(targets, read_paths=bound)
 
         # Print the structured Unicode audit table
         print_audit_table(rows)
@@ -160,10 +176,19 @@ def run_llama_protected(
             mode=operating_mode,
         )
 
+        changed = changed_files(pins)
+        if changed:
+            print_lockdown_banner(
+                failed_target=changed[0],
+                reason="MODIFIED_AFTER_PIN: file changed or was replaced during verification",
+            )
+            return 1
+
         print_phase(2, f"Passing Execution to Runtime Binary: {os.path.basename(safe_bin)}")
-        cmd = [safe_bin] + safe_args
-        
-        proc = subprocess.Popen(cmd, shell=False, close_fds=True)
+        # Linux: the runtime opens the verified descriptors (/proc/self/fd/N), not the paths.
+        cmd = [safe_bin] + bind_target_files(safe_args, bound)
+
+        proc = subprocess.Popen(cmd, shell=False, close_fds=True, pass_fds=pass_fds(pins))
         proc.wait()
         return proc.returncode
     except FileNotFoundError:

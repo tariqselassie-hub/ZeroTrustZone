@@ -1,6 +1,8 @@
 """
-Anti-TOCTOU file pinning on Windows: verified files cannot be written, deleted
-or renamed until the runtime (`ztz run`) or SDK block (`attested`) has finished.
+Anti-TOCTOU file pinning. Windows: verified files cannot be written, deleted or
+renamed until the runtime (`ztz run`) or SDK block (`attested`) has finished.
+Linux: verification and the runtime read the pinned descriptor, so swapping the
+path is harmless and in-place writes abort the launch.
 """
 
 import os
@@ -14,10 +16,16 @@ from unittest.mock import patch
 from ztz.core.crypto import ZTZSigner, generate_keypair
 from ztz.core.trust_store import TrustStore
 from ztz.runners import llama_cpp
-from ztz.core.file_pin import pin_files, unpin_files
-from ztz.runners.llama_cpp import run_llama_protected
+from ztz.core import file_pin
+from ztz.core.file_pin import FD_BINDING, changed_files, pin_files, unpin_files
+from ztz.core.validator import PreFlightValidator
+from ztz.runners.llama_cpp import bind_target_files, run_llama_protected
 
 windows_only = unittest.skipUnless(os.name == "nt", "mandatory share-mode pinning is Windows-specific")
+posix_only = unittest.skipIf(os.name == "nt", "POSIX descriptor pinning")
+linux_only = unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+
+MODEL_BYTES = b"GGUF\x03\x00\x00\x00" + b"\x00" * 16
 
 
 def _try_tamper(path: str) -> dict:
@@ -140,6 +148,137 @@ class TestRunHoldsPins(unittest.TestCase):
     def test_open_writer_aborts_before_launch(self):
         with patch.object(llama_cpp.subprocess, "Popen") as popen, open(self.model, "ab"):
             self.assertEqual(self._run(), 1)
+        popen.assert_not_called()
+
+
+class TestBindTargetFiles(unittest.TestCase):
+    def test_rewrites_separate_and_inline_file_args_only(self):
+        args = ["-m", "w.gguf", "--lora=a.gguf", "-p", "w.gguf", "-f", "ctx.txt"]
+        mapping = {"w.gguf": "/proc/self/fd/5", "a.gguf": "/proc/self/fd/6"}
+        self.assertEqual(
+            bind_target_files(args, mapping),
+            ["-m", "/proc/self/fd/5", "--lora=/proc/self/fd/6", "-p", "w.gguf", "-f", "ctx.txt"],
+        )
+
+
+class _PosixFixture(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        keys = os.path.join(self.tmp, "keys")
+        priv, _ = generate_keypair(out_dir=keys, name="root")
+        self.trust = TrustStore([keys])
+        self.model = os.path.join(self.tmp, "w.gguf")
+        with open(self.model, "wb") as f:
+            f.write(MODEL_BYTES)
+        ZTZSigner(priv).sign_file(self.model)
+        self.evil = os.path.join(self.tmp, "evil.gguf")
+        with open(self.evil, "wb") as f:
+            f.write(b"GGUF\x03\x00\x00\x00" + b"\xff" * 16)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+@posix_only
+class TestPosixPinning(_PosixFixture):
+    def test_inplace_write_after_pin_is_detected(self):
+        pins = pin_files([self.model])
+        try:
+            with open(self.model, "ab") as f:
+                f.write(b"backdoor")
+            self.assertEqual(changed_files(pins), [self.model])
+        finally:
+            unpin_files(pins)
+
+    def test_exclusive_lock_holder_blocks_pinning(self):
+        import fcntl
+        fd = os.open(self.model, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            with self.assertRaises(OSError) as cm:
+                pin_files([self.model])
+            self.assertEqual(cm.exception.filename, self.model)
+        finally:
+            os.close(fd)
+
+    def test_path_swap_detected_without_descriptor_binding(self):
+        # The macOS code path: the original path is loaded, so a swap must abort.
+        with patch.object(file_pin, "FD_BINDING", False):
+            pins = pin_files([self.model])
+            try:
+                self.assertEqual(pins[0].load_path, self.model)
+                os.replace(self.evil, self.model)
+                self.assertEqual(changed_files(pins), [self.model])
+            finally:
+                unpin_files(pins)
+
+
+@linux_only
+class TestLinuxDescriptorBinding(_PosixFixture):
+    def setUp(self):
+        super().setUp()
+        patcher = patch.object(llama_cpp.shutil, "which", return_value="llama-cli")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_load_path_survives_path_swap(self):
+        pins = pin_files([self.model])
+        try:
+            os.replace(self.evil, self.model)
+            with open(pins[0].load_path, "rb") as f:
+                self.assertEqual(f.read(), MODEL_BYTES)
+            self.assertEqual(changed_files(pins), [])
+        finally:
+            unpin_files(pins)
+
+    def test_validator_reads_pinned_descriptor(self):
+        pins = pin_files([self.model])
+        try:
+            os.replace(self.evil, self.model)
+            with PreFlightValidator(self.trust, use_cache=False) as v:
+                row = v.validate_file(self.model, read_path=pins[0].load_path)
+            self.assertEqual(row["status"], "VERIFIED")
+        finally:
+            unpin_files(pins)
+
+    def test_runtime_loads_verified_bytes_after_swap(self):
+        seen = {}
+        model, evil = self.model, self.evil
+
+        class FakeRuntime:
+            returncode = 0
+
+            def __init__(self, cmd, **kwargs):
+                os.replace(evil, model)  # attacker swaps the path right at launch
+                seen["arg"] = cmd[2]
+                seen["pass_fds"] = kwargs.get("pass_fds")
+                with open(cmd[2], "rb") as f:
+                    seen["bytes"] = f.read()
+
+            def wait(self):
+                return 0
+
+        with patch.object(llama_cpp.subprocess, "Popen", FakeRuntime):
+            rc = run_llama_protected("llama-cli", ["-m", self.model], self.trust, use_cache=False)
+        self.assertEqual(rc, 0)
+        self.assertTrue(seen["arg"].startswith("/proc/self/fd/"))
+        self.assertIn(int(seen["arg"].rsplit("/", 1)[1]), seen["pass_fds"])
+        self.assertEqual(seen["bytes"], MODEL_BYTES)
+
+    def test_inplace_write_during_verification_aborts_launch(self):
+        real_audit = PreFlightValidator.audit_batch
+        model = self.model
+
+        def audit_then_tamper(self_, *args, **kwargs):
+            result = real_audit(self_, *args, **kwargs)
+            with open(model, "ab") as f:
+                f.write(b"backdoor")
+            return result
+
+        with patch.object(PreFlightValidator, "audit_batch", audit_then_tamper), \
+             patch.object(llama_cpp.subprocess, "Popen") as popen:
+            rc = run_llama_protected("llama-cli", ["-m", self.model], self.trust, use_cache=False)
+        self.assertEqual(rc, 1)
         popen.assert_not_called()
 
 

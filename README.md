@@ -24,7 +24,8 @@ ZTZ intercepts local LLM execution (`llama.cpp` via `ztz run`, Ollama / LM Studi
 1. **Pre-Memory Quarantine**: Runs mathematically strictly before `llama.cpp` or Ollama allocates tensors. If verification fails, pointers are never created and execution halts instantly.
 2. **Anti-TOCTOU File Pinning**: `ztz run` and the SDK's `attested` / `@guard` pin every input file *before* verification and hold it until the runtime exits (or the SDK block ends), so the bytes loaded are the bytes attested.
    - **Windows**: mandatory. Files are opened read-share-only, so the OS refuses any other process's attempt to write, rename or delete them. If another process already has a file open for writing, ZTZ aborts instead of verifying.
-   - **Linux/macOS**: advisory shared `flock`. This only stops processes that also take locks.
+   - **Linux**: descriptor-bound. Each file is opened once; verification and the runtime both read that open descriptor (`/proc/self/fd/N`), so renaming, deleting or swapping the path afterwards has no effect on what gets loaded. Writes to the same file during verification are detected and abort the launch; writes after launch are not prevented. An exclusive `flock` held by another process also aborts.
+   - **macOS**: advisory shared `flock`, plus the same pre-launch check that the file was not modified or swapped during verification. The runtime still opens the path.
 3. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
 4. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
 5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
@@ -159,17 +160,19 @@ assert all_clean, "Quarantined! Untrusted model or context detected."
 
 Each row's `status` is `VERIFIED` / `VERIFIED_CACHE` on success, or one of `MISSING`, `UNSAFE_FORMAT`, `NO_SIG`, `NO_ROOTS`, `TAMPERED`.
 
-Load any in-process runtime (ONNX Runtime, Safetensors, PyTorch...) inside an attested block. The files are pinned, verified, and stay pinned until the block exits:
+Load any in-process runtime (ONNX Runtime, Safetensors, PyTorch...) inside an attested block. The files are pinned, verified, and stay pinned until the block exits. Load the paths the block yields, not the originals: on Linux they are the verified descriptors (`/proc/self/fd/N`); elsewhere they are the same paths you passed in.
 
 ```python
 import onnxruntime
 import ztz
 
-with ztz.attested("models/model.onnx"):
-    session = onnxruntime.InferenceSession("models/model.onnx")
+with ztz.attested("models/model.onnx") as (model,):
+    session = onnxruntime.InferenceSession(model)
 ```
 
-Or guard a function so its file arguments are attested and pinned while it runs:
+Loaders that pick a format from the file extension will not see one on a `/proc/self/fd/N` path, so pass the format explicitly to those.
+
+Or guard a function so its file arguments are attested and pinned while it runs. The guarded arguments are replaced with the yielded paths:
 
 ```python
 import ztz

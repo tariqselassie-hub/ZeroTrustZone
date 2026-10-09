@@ -82,7 +82,17 @@ class ModelFormatInspector:
     MAX_PICKLE_SCAN_BYTES = 256 * 1024 * 1024
 
     @classmethod
-    def inspect(cls, file_path: str) -> ModelInspectionReport:
+    def inspect(cls, file_path: str, read_path: Optional[str] = None) -> ModelInspectionReport:
+        """
+        Inspects file_path. read_path, if given, is where the bytes are read from
+        (e.g. a pinned /proc/self/fd/N); file_path still drives extension checks.
+        """
+        report = cls._inspect(read_path or file_path, file_path)
+        report.file_path = file_path
+        return report
+
+    @classmethod
+    def _inspect(cls, file_path: str, name: str) -> ModelInspectionReport:
         if not os.path.exists(file_path):
             return ModelInspectionReport(
                 file_path=file_path,
@@ -118,7 +128,7 @@ class ModelFormatInspector:
             return cls._inspect_safetensors(file_path, file_size)
 
         # 3. Test for PyTorch / Pickle format
-        if file_path.lower().endswith((".pt", ".bin", ".pkl", ".ckpt")):
+        if name.lower().endswith((".pt", ".bin", ".pkl", ".ckpt")):
             return cls._inspect_pickle(file_path, file_size)
 
         # 4. Unknown / Raw format

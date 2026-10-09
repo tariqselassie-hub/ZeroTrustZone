@@ -5,6 +5,7 @@ import unittest
 
 from ztz import attested, guard, UntrustedPayloadError
 from ztz.core.crypto import ZTZSigner, generate_keypair
+from ztz.core.file_pin import FD_BINDING
 
 
 class TestSdk(unittest.TestCase):
@@ -25,7 +26,11 @@ class TestSdk(unittest.TestCase):
 
     def test_attested_yields_for_signed_file(self):
         with attested(self.model, trust_store=self.keys) as paths:
-            self.assertEqual(paths, [self.model])
+            self.assertEqual(len(paths), 1)
+            if FD_BINDING:
+                self.assertTrue(paths[0].startswith("/proc/self/fd/"))
+            else:
+                self.assertEqual(paths, [self.model])
 
     def test_attested_rejects_unsigned_before_block_runs(self):
         ran = False
@@ -73,6 +78,23 @@ class TestSdk(unittest.TestCase):
             with self.assertRaises(UntrustedPayloadError):
                 with attested(self.model, trust_store=self.keys):
                     pass
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_yielded_path_survives_swap_of_original(self):
+        with open(self.model, "rb") as f:
+            original = f.read()
+        with attested(self.model, trust_store=self.keys) as (load,):
+            os.replace(self.unsigned, self.model)
+            with open(load, "rb") as f:
+                self.assertEqual(f.read(), original)
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_guard_passes_descriptor_to_function(self):
+        @guard(trust_store=self.keys, targets=["path"])
+        def load(path):
+            return path
+
+        self.assertTrue(load(self.model).startswith("/proc/self/fd/"))
 
 
 if __name__ == "__main__":

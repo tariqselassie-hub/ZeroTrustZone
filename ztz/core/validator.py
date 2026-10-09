@@ -49,10 +49,13 @@ class PreFlightValidator:
         )
         return hashlib.sha256(sig_bytes + b"|" + pub_der).hexdigest()
 
-    def validate_file(self, target_path: str, sig_path: str = None) -> Dict[str, Any]:
+    def validate_file(self, target_path: str, sig_path: str = None, read_path: str = None) -> Dict[str, Any]:
         """
         Validates a single target file against all available trusted authorities.
+        read_path (e.g. a pinned /proc/self/fd/N) is where the bytes are read from;
+        target_path names the file, locates its .sig and keys the cache.
         """
+        read_path = read_path or target_path
         if sig_path is None:
             sig_path = f"{target_path}.sig"
 
@@ -67,13 +70,13 @@ class PreFlightValidator:
             "format": "UNKNOWN",
         }
 
-        if not os.path.exists(target_path):
+        if not os.path.exists(read_path):
             result["status"] = "MISSING"
             result["error"] = "Target file not found"
             return result
 
         # Pre-Flight Container & Format Safety Check
-        format_report = ModelFormatInspector.inspect(target_path)
+        format_report = ModelFormatInspector.inspect(target_path, read_path)
         result["format"] = format_report.format
         if format_report.risk_level == "CRITICAL" and not format_report.is_safe_format:
             result["status"] = "UNSAFE_FORMAT"
@@ -95,6 +98,7 @@ class PreFlightValidator:
             cached = self.cache.get_cached_attestation(
                 target_path,
                 binding_for=lambda name: self._cache_binding(sig_path, name),
+                stat_path=read_path,
             )
             if cached:
                 result["key"] = cached["key"]
@@ -106,7 +110,7 @@ class PreFlightValidator:
         # Try all trusted authorities
         for auth in authorities:
             is_valid, algo_or_err = ZTZVerifier.verify_file(
-                target_path,
+                read_path,
                 sig_path,
                 auth["key"],
             )
@@ -114,7 +118,8 @@ class PreFlightValidator:
                 if self.use_cache:
                     binding = self._cache_binding(sig_path, auth["name"])
                     if binding is not None:
-                        self.cache.store_attestation(target_path, auth["name"], algo_or_err, binding)
+                        self.cache.store_attestation(target_path, auth["name"], algo_or_err, binding,
+                                                     stat_path=read_path)
                 result["key"] = auth["name"]
                 result["algo"] = algo_or_err
                 result["status"] = "VERIFIED"
@@ -128,11 +133,15 @@ class PreFlightValidator:
         result["error"] = "Signature does not match any trusted root of trust"
         return result
 
-    def audit_batch(self, targets: List[str]) -> Tuple[bool, List[Dict[str, Any]], float]:
+    def audit_batch(
+        self, targets: List[str], read_paths: Optional[Dict[str, str]] = None
+    ) -> Tuple[bool, List[Dict[str, Any]], float]:
         """
-        Audits a list of target files.
+        Audits a list of target files. read_paths maps a target to where its bytes
+        are read from (see ztz.core.file_pin.load_paths).
         Returns (all_clean, audit_rows, elapsed_seconds).
         """
+        read_paths = read_paths or {}
         t0 = time.perf_counter()
         rows = []
         all_clean = True
@@ -140,7 +149,7 @@ class PreFlightValidator:
         for target in targets:
             if not target:
                 continue
-            row = self.validate_file(target)
+            row = self.validate_file(target, read_path=read_paths.get(target))
             rows.append(row)
             if row["status"] not in ("VERIFIED", "VERIFIED_CACHE"):
                 all_clean = False

@@ -8,7 +8,7 @@ from functools import wraps
 from typing import Iterator, List, Callable, Optional
 
 from ztz.sdk.exceptions import UntrustedPayloadError
-from ztz.core.file_pin import pin_files, unpin_files
+from ztz.core.file_pin import changed_files, load_paths, pin_files, unpin_files
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
 
@@ -16,11 +16,13 @@ from ztz.core.validator import PreFlightValidator
 @contextmanager
 def attested(*paths: str, trust_store: Optional[str] = None) -> Iterator[List[str]]:
     """
-    Pins, then verifies every path; the files stay pinned for the whole block so
-    the bytes the runtime loads are the bytes that were attested:
+    Pins, then verifies every path; the files stay pinned for the whole block.
+    Yields the paths to load, in order: on Linux these are the verified
+    descriptors (/proc/self/fd/N), so load them rather than the original names
+    to get the bytes that were attested; elsewhere they are the paths unchanged:
 
-        with attested("model.onnx"):
-            session = onnxruntime.InferenceSession("model.onnx")
+        with attested("model.onnx") as (model,):
+            session = onnxruntime.InferenceSession(model)
 
     Raises UntrustedPayloadError if a file fails attestation or cannot be pinned.
     """
@@ -34,15 +36,21 @@ def attested(*paths: str, trust_store: Optional[str] = None) -> Iterator[List[st
     try:
         # Trust store is re-read per call so key revocation takes effect immediately.
         store = TrustStore([trust_store] if trust_store else None)
+        bound = load_paths(pins)
         with PreFlightValidator(store, use_cache=True) as validator:
             for path in targets:
-                row = validator.validate_file(path)
+                row = validator.validate_file(path, read_path=bound.get(path))
                 if row["status"] not in ("VERIFIED", "VERIFIED_CACHE"):
                     raise UntrustedPayloadError(
                         f"ZTZ Security Lockdown: '{path}' failed attestation. "
                         f"Reason: {row.get('error', 'Unknown')}"
                     )
-        yield targets
+        changed = changed_files(pins)
+        if changed:
+            raise UntrustedPayloadError(
+                f"ZTZ Security Lockdown: '{changed[0]}' changed or was replaced during verification"
+            )
+        yield [bound.get(path, path) for path in targets]
     finally:
         unpin_files(pins)
 
@@ -54,7 +62,9 @@ def guard(trust_store: str = None, targets: List[str] = None):
     Attests the file paths passed in the arguments named by `targets` against
     `trust_store` (default: the home trust roots, see
     ztz.core.trust_store.default_search_paths) and keeps them pinned while the
-    function runs. Raises UntrustedPayloadError if any fails attestation.
+    function runs. Those arguments are replaced with the paths yielded by
+    `attested` (the verified descriptors on Linux). Raises UntrustedPayloadError
+    if any fails attestation.
     """
     if targets is None:
         targets = []
@@ -66,8 +76,12 @@ def guard(trust_store: str = None, targets: List[str] = None):
         def wrapper(*args, **kwargs):
             bound_args = sig.bind(*args, **kwargs)
             bound_args.apply_defaults()
-            paths = [bound_args.arguments[name] for name in targets if name in bound_args.arguments]
-            with attested(*paths, trust_store=trust_store):
-                return func(*args, **kwargs)
+            names = [
+                name for name in targets
+                if isinstance(bound_args.arguments.get(name), str) and bound_args.arguments[name]
+            ]
+            with attested(*(bound_args.arguments[n] for n in names), trust_store=trust_store) as loads:
+                bound_args.arguments.update(zip(names, loads))
+                return func(*bound_args.args, **bound_args.kwargs)
         return wrapper
     return decorator
