@@ -7,9 +7,10 @@ import os
 import time
 import hashlib
 from typing import List, Dict, Any, Optional, Tuple
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from ztz.core.trust_store import TrustStore
-from ztz.core.crypto import ZTZVerifier
+from ztz.core.crypto import compute_file_sha256, verify_bytes
 from ztz.core.cache import AttestationCache
 from ztz.core.model_inspector import ModelFormatInspector
 
@@ -74,6 +75,11 @@ class PreFlightValidator:
             result["status"] = "MISSING"
             result["error"] = "Target file not found"
             return result
+        if not os.path.isfile(read_path):
+            # A FIFO or device would hang or stream forever in the inspector / hasher.
+            result["status"] = "UNSAFE_FORMAT"
+            result["error"] = "Target is not a regular file"
+            return result
 
         # Pre-Flight Container & Format Safety Check
         format_report = ModelFormatInspector.inspect(target_path, read_path)
@@ -107,24 +113,31 @@ class PreFlightValidator:
                 result["error"] = cached["error"]
                 return result
 
-        # Try all trusted authorities
+        try:
+            with open(sig_path, "rb") as sf:
+                signature = sf.read()
+        except OSError as e:
+            result["status"] = "NO_SIG"
+            result["error"] = f"Could not read .sig: {e}"
+            return result
+
+        # Hash once (a full stream of possibly 50GB+), then try every trusted authority.
+        digest = compute_file_sha256(read_path)
         for auth in authorities:
-            is_valid, algo_or_err = ZTZVerifier.verify_file(
-                read_path,
-                sig_path,
-                auth["key"],
-            )
-            if is_valid:
-                if self.use_cache:
-                    binding = self._cache_binding(sig_path, auth["name"])
-                    if binding is not None:
-                        self.cache.store_attestation(target_path, auth["name"], algo_or_err, binding,
-                                                     stat_path=read_path)
-                result["key"] = auth["name"]
-                result["algo"] = algo_or_err
-                result["status"] = "VERIFIED"
-                result["error"] = None
-                return result
+            try:
+                algo = verify_bytes(auth["key"], signature, digest)
+            except (InvalidSignature, TypeError, ValueError):
+                continue  # not this authority (or a malformed signature for its key type)
+            if self.use_cache:
+                binding = self._cache_binding(sig_path, auth["name"])
+                if binding is not None:
+                    self.cache.store_attestation(target_path, auth["name"], algo, binding,
+                                                 stat_path=read_path)
+            result["key"] = auth["name"]
+            result["algo"] = algo
+            result["status"] = "VERIFIED"
+            result["error"] = None
+            return result
 
         # If loop completed without valid match:
         result["key"] = "Unknown"
