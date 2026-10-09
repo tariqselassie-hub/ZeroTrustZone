@@ -1,7 +1,7 @@
 """
 ZTZ Pre-Flight Context Firewall (core/context_shield.py)
 Zero-Trust context sanitization, secret scrubbing, and cryptographic pre-flight
-attestation before LLM ingestion (UserShield Project).
+attestation before LLM ingestion (ZeroTrustZone Project).
 """
 
 import re
@@ -19,10 +19,18 @@ SECRET_PATTERNS = [
             re.IGNORECASE
         )
     ),
-    # OpenAI API Keys
+    # Anthropic API / Admin Keys (sk-ant-api03-..., sk-ant-admin01-...).
+    # Must precede the generic sk- rule so these are labelled correctly.
+    # Key-body rules are greedy with no upper bound: a length cap plus a trailing \b
+    # would stop at an internal '-' and leave the remainder of a long key unmasked.
+    (
+        "ANTHROPIC_API_KEY",
+        re.compile(r"\bsk-ant-[a-z]+\d*-[A-Za-z0-9_-]{20,}")
+    ),
+    # OpenAI API Keys (legacy sk-..., project sk-proj-..., service account sk-svcacct-...)
     (
         "OPENAI_API_KEY",
-        re.compile(r"\bsk-[a-zA-Z0-9_-]{24,64}\b")
+        re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")
     ),
     # GitHub Personal Access / OAuth Tokens
     (
@@ -72,9 +80,11 @@ class EnclaveSeal:
         ztz_trace: Optional[List[int]] = None,
         status: str = "SECURE",
         message: str = "Hardware seal active",
-        timestamp: Optional[float] = None
+        timestamp: Optional[float] = None,
+        key_id: Optional[str] = None
     ):
         self.sealed = sealed
+        self.key_id = key_id
         self.mode = mode
         self.signature_hex = signature_hex
         self.ztz_trace = ztz_trace
@@ -91,7 +101,40 @@ class EnclaveSeal:
             "status": self.status,
             "message": self.message,
             "timestamp": self.timestamp,
+            "key_id": self.key_id,
         }
+
+
+# Local fallback seal: signed with the authority key so anyone holding the public key
+# (i.e. the trust store) can verify it, and nobody without the private key can mint one.
+LOCAL_SEAL_MODE = "LOCAL_AUTHORITY_SIG"
+SEAL_KEY_ENV = "ZTZ_SEAL_KEY"
+_seal_key_cache: Dict[Tuple[str, int], Any] = {}
+
+
+def _load_seal_key():
+    """Loads the local sealing key (ZTZ_SEAL_KEY, else the authority key), cached by mtime."""
+    import os
+    from ztz.core.trust_store import find_private_key
+    from cryptography.hazmat.primitives import serialization
+
+    path = os.environ.get(SEAL_KEY_ENV) or find_private_key()
+    if not path or not os.path.isfile(path):
+        return None
+    cache_key = (os.path.abspath(path), os.stat(path).st_mtime_ns)
+    if cache_key not in _seal_key_cache:
+        try:
+            with open(path, "rb") as kf:
+                key = serialization.load_pem_private_key(kf.read(), password=None)
+        except (OSError, ValueError, TypeError):
+            return None
+        _seal_key_cache.clear()
+        _seal_key_cache[cache_key] = key
+    return _seal_key_cache[cache_key]
+
+
+def _seal_payload(payload_digest: str) -> bytes:
+    return f"ztz-seal:v1:{payload_digest}".encode("utf-8")
 
 
 class ContextAuditResult:
@@ -198,11 +241,11 @@ class ContextShield:
     ) -> EnclaveSeal:
         """
         Requests a ZTZ DSA attestation signature from ZTZ Enclave (Port 5555).
-        Falls back to local sovereign HMAC-SHA256 signature if Enclave is offline.
+        Falls back to a local authority-key signature if the Enclave is offline,
+        and to an explicit UNSEALED result if no signing key is available.
         """
         import os
         import json
-        import hmac
         import urllib.request
         import urllib.error
 
@@ -218,7 +261,7 @@ class ContextShield:
         req = urllib.request.Request(
             endpoint,
             data=req_data,
-            headers={"Content-Type": "application/json", "User-Agent": "UserShield-Sentinel/2.0"},
+            headers={"Content-Type": "application/json", "User-Agent": "ZTZ-Sentinel/2.0"},
             method="POST"
         )
 
@@ -241,16 +284,49 @@ class ContextShield:
             pass
 
         # Sovereign Local Fallback
-        local_key = os.environ.get("USERSHIELD_SIGNING_KEY", "ZTZ_SOVEREIGN_ROOT_SECRET").encode("utf-8")
-        local_mac = hmac.new(local_key, payload_digest.encode("utf-8"), hashlib.sha256).hexdigest()
+        from ztz.core.crypto import sign_bytes, public_key_id
+
+        priv = _load_seal_key()
+        if priv is None:
+            return EnclaveSeal(
+                sealed=False,
+                mode="UNSEALED",
+                status="UNSEALED",
+                message="Enclave offline and no local signing key; run 'ztz init' or set ZTZ_SEAL_KEY."
+            )
         return EnclaveSeal(
             sealed=True,
-            mode="LOCAL_SOVEREIGN_FALLBACK",
-            signature_hex=local_mac,
-            ztz_trace=None,
+            mode=LOCAL_SEAL_MODE,
+            signature_hex=sign_bytes(priv, _seal_payload(payload_digest)).hex(),
             status="LOCAL_ATTESTED",
-            message="Enclave offline: local cryptographic MAC attached."
+            message="Enclave offline: local authority signature attached.",
+            key_id=public_key_id(priv.public_key()),
         )
+
+    @staticmethod
+    def verify_local_seal(payload_digest: str, seal: EnclaveSeal, trust_store) -> Optional[str]:
+        """
+        Verifies a LOCAL_AUTHORITY_SIG seal against the trust store.
+        Returns the name of the authority that signed it, or None if invalid.
+        """
+        from cryptography.exceptions import InvalidSignature
+        from ztz.core.crypto import verify_bytes, public_key_id
+
+        if not seal or not seal.sealed or seal.mode != LOCAL_SEAL_MODE or not seal.signature_hex:
+            return None
+        try:
+            sig = bytes.fromhex(seal.signature_hex)
+        except ValueError:
+            return None
+        for auth in trust_store.list_authorities():
+            if seal.key_id and public_key_id(auth["key"]) != seal.key_id:
+                continue
+            try:
+                verify_bytes(auth["key"], sig, _seal_payload(payload_digest))
+                return auth["name"]
+            except (InvalidSignature, TypeError):
+                continue
+        return None
 
     @classmethod
     def seal_and_attest(

@@ -13,6 +13,38 @@ from cryptography.exceptions import InvalidSignature
 
 CHUNK_SIZE = 64 * 1024 * 1024  # 64 MB streaming buffer
 
+def _pss() -> padding.PSS:
+    return padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH)
+
+def sign_bytes(private_key, data: bytes) -> bytes:
+    """Signs data with Ed25519, or RSA-PSS/SHA-256 for RSA keys."""
+    if isinstance(private_key, ed25519.Ed25519PrivateKey):
+        return private_key.sign(data)
+    if isinstance(private_key, rsa.RSAPrivateKey):
+        return private_key.sign(data, _pss(), hashes.SHA256())
+    raise TypeError(f"Unsupported private key type: {type(private_key)}")
+
+def verify_bytes(public_key, signature: bytes, data: bytes) -> str:
+    """
+    Verifies signature over data. Returns the algorithm name on success.
+    Raises InvalidSignature on mismatch, TypeError for unsupported key types.
+    """
+    if isinstance(public_key, ed25519.Ed25519PublicKey):
+        public_key.verify(signature, data)
+        return "Ed25519"
+    if isinstance(public_key, rsa.RSAPublicKey):
+        public_key.verify(signature, data, _pss(), hashes.SHA256())
+        return "RSA-PSS"
+    raise TypeError(f"Unsupported public key type: {type(public_key)}")
+
+def public_key_id(public_key) -> str:
+    """Short stable identifier: first 16 hex chars of SHA-256 over the SPKI DER."""
+    der = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return hashlib.sha256(der).hexdigest()[:16]
+
 def compute_file_sha256(file_path: str) -> bytes:
     """Computes SHA-256 digest in chunks to handle multi-gigabyte GGUF models."""
     hasher = hashlib.sha256()
@@ -47,23 +79,8 @@ class ZTZSigner:
         if output_sig_path is None:
             output_sig_path = f"{target_file_path}.sig"
 
-        file_digest = compute_file_sha256(target_file_path)
-
-        if isinstance(self.private_key, ed25519.Ed25519PrivateKey):
-            # Ed25519 signs the 32-byte SHA-256 digest
-            signature = self.private_key.sign(file_digest)
-        elif isinstance(self.private_key, rsa.RSAPrivateKey):
-            # RSA-PSS on precomputed digest
-            signature = self.private_key.sign(
-                file_digest,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA256()),
-                    salt_length=padding.PSS.MAX_LENGTH,
-                ),
-                hashes.SHA256(),
-            )
-        else:
-            raise TypeError(f"Unsupported private key type: {type(self.private_key)}")
+        # Signs the 32-byte SHA-256 digest (Ed25519, or RSA-PSS over the digest)
+        signature = sign_bytes(self.private_key, compute_file_sha256(target_file_path))
 
         with open(output_sig_path, "wb") as sf:
             sf.write(signature)
@@ -97,22 +114,9 @@ class ZTZVerifier:
         file_digest = compute_file_sha256(target_file_path)
 
         try:
-            if isinstance(public_key, ed25519.Ed25519PublicKey):
-                public_key.verify(signature, file_digest)
-                return True, "Ed25519"
-            elif isinstance(public_key, rsa.RSAPublicKey):
-                public_key.verify(
-                    signature,
-                    file_digest,
-                    padding.PSS(
-                        mgf=padding.MGF1(hashes.SHA256()),
-                        salt_length=padding.PSS.MAX_LENGTH,
-                    ),
-                    hashes.SHA256(),
-                )
-                return True, "RSA-PSS"
-            else:
-                return False, f"Unsupported public key type: {type(public_key)}"
+            return True, verify_bytes(public_key, signature, file_digest)
+        except TypeError as e:
+            return False, str(e)
         except InvalidSignature:
             return False, "Signature mismatch / Invariant violated"
         except Exception as e:
@@ -147,8 +151,11 @@ def generate_keypair(
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    with open(priv_path, "wb") as f:
+    # Owner-only permissions from creation; never expose key bytes via a umask window.
+    fd = os.open(priv_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(priv_bytes)
+    os.chmod(priv_path, 0o600)  # enforce on pre-existing files too
 
     # Serialize public key
     pub_bytes = pub_key.public_bytes(
@@ -161,6 +168,6 @@ def generate_keypair(
     return priv_path, pub_path
 
 
-# Backward-compatible and sovereign aliases for UserShield ecosystem
-UserShieldSigner = ZTZSigner
-UserShieldVerifier = ZTZVerifier
+# Aliases for ZeroTrustZone ecosystem
+ZeroTrustZoneSigner = ZTZSigner
+ZeroTrustZoneVerifier = ZTZVerifier

@@ -1,5 +1,5 @@
 """
-UserShield Model Weight & Architecture Pre-Flight Inspector (core/model_inspector.py)
+ZeroTrustZone (ZTZ) Model Weight & Architecture Pre-Flight Inspector (core/model_inspector.py)
 Inspects local model weight containers (GGUF, Safetensors, ONNX, PyTorch)
 before memory mapping or tensor allocation.
 
@@ -11,8 +11,11 @@ Invariants:
 """
 
 import os
+import io
 import json
 import struct
+import zipfile
+import pickletools
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
@@ -47,8 +50,36 @@ class ModelFormatInspector:
     # GGUF constants
     GGUF_MAGIC = b"GGUF"  # 0x46554747 little-endian
 
-    # Dangerous Python pickle opcodes
-    PICKLE_OPCODES = [b"c__builtin__", b"cposix", b"cnt", b"cos", b"csubprocess", b"R", b"b", b"c"]
+    # Imports that give a pickle code execution, filesystem, process or network reach.
+    DANGEROUS_PICKLE_MODULES = frozenset({
+        "os", "posix", "nt", "subprocess", "sys", "socket", "shutil", "runpy",
+        "importlib", "pty", "webbrowser", "ctypes", "code", "marshal", "pickle",
+        "urllib", "requests", "http", "asyncio", "multiprocessing", "signal",
+    })
+    DANGEROUS_PICKLE_BUILTINS = frozenset({
+        "eval", "exec", "compile", "open", "getattr", "setattr", "delattr",
+        "__import__", "globals", "locals", "vars", "input", "breakpoint",
+    })
+    # Imports a vanilla torch.save()/numpy checkpoint legitimately needs.
+    SAFE_PICKLE_GLOBALS = frozenset({
+        ("collections", "OrderedDict"),
+        ("torch", "Size"),
+        ("torch", "device"),
+        ("torch", "dtype"),
+        ("torch._utils", "_rebuild_tensor"),
+        ("torch._utils", "_rebuild_tensor_v2"),
+        ("torch._utils", "_rebuild_parameter"),
+        ("torch._utils", "_rebuild_parameter_with_state"),
+        ("torch._utils", "_rebuild_qtensor"),
+        ("torch._utils", "_rebuild_sparse_tensor"),
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy._core.multiarray", "_reconstruct"),
+        ("numpy", "ndarray"),
+        ("numpy", "dtype"),
+        ("_codecs", "encode"),
+    })
+    MAX_PICKLE_STREAMS = 8              # legacy torch files concatenate several pickles
+    MAX_PICKLE_SCAN_BYTES = 256 * 1024 * 1024
 
     @classmethod
     def inspect(cls, file_path: str) -> ModelInspectionReport:
@@ -197,25 +228,100 @@ class ModelFormatInspector:
             "Legacy PyTorch weights (.pt/.bin) rely on Python pickle parsing, which allows arbitrary code execution (RCE).",
             "Strongly recommend converting to Safetensors or GGUF before running in production."
         ]
-        has_risky_opcodes = False
+        dangerous, unknown = set(), set()
         try:
-            with open(file_path, "rb") as f:
-                head = f.read(4096)
-                for op in cls.PICKLE_OPCODES:
-                    if op in head:
-                        has_risky_opcodes = True
-                        warnings.append(f"Suspicious pickle opcode pattern detected: '{op.decode(errors='ignore')}'")
-                        break
+            if zipfile.is_zipfile(file_path):
+                # torch.save() >= 1.6: zip archive with the object graph in */data.pkl
+                with zipfile.ZipFile(file_path) as zf:
+                    for name in zf.namelist():
+                        if name.endswith(".pkl"):
+                            with zf.open(name) as member:
+                                cls._scan_pickle_stream(io.BufferedReader(member), dangerous, unknown)
+            else:
+                with open(file_path, "rb") as f:
+                    cls._scan_pickle_stream(f, dangerous, unknown)
         except Exception as e:
-            warnings.append(f"Could not scan pickle header: {e}")
+            warnings.append(f"Could not fully scan pickle stream: {e}")
 
+        for ref in sorted(dangerous):
+            warnings.append(f"Dangerous pickle opcode import detected: '{ref}' (GLOBAL/STACK_GLOBAL)")
+        for ref in sorted(unknown):
+            warnings.append(f"Non-standard pickle import: '{ref}'")
+
+        has_risky_opcodes = bool(dangerous)
         return ModelInspectionReport(
             file_path=file_path,
             file_size_bytes=file_size,
             format="PYTORCH_PICKLE",
             is_safe_format=False,
             magic_bytes_valid=True,
-            metadata={"pickle_format": True, "has_risky_opcodes": has_risky_opcodes},
+            metadata={
+                "pickle_format": True,
+                "has_risky_opcodes": has_risky_opcodes,
+                "dangerous_imports": sorted(dangerous),
+                "unknown_imports": sorted(unknown),
+            },
             warnings=warnings,
             risk_level="CRITICAL" if has_risky_opcodes else "MEDIUM"
         )
+
+    @classmethod
+    def _classify_global(cls, module: str, name: str, dangerous: set, unknown: set):
+        ref = f"{module}.{name}"
+        root = module.split(".", 1)[0]
+        if root in cls.DANGEROUS_PICKLE_MODULES:
+            dangerous.add(ref)
+        elif root in ("builtins", "__builtin__") and name in cls.DANGEROUS_PICKLE_BUILTINS:
+            dangerous.add(ref)
+        elif (module, name) in cls.SAFE_PICKLE_GLOBALS:
+            pass
+        elif module == "torch" and name.endswith("Storage"):
+            pass
+        else:
+            unknown.add(ref)
+
+    @classmethod
+    def _scan_pickle_stream(cls, f, dangerous: set, unknown: set):
+        """
+        Statically walks pickle opcodes (never executes them) and records every
+        imported global. Handles protocol 0-5 GLOBAL and STACK_GLOBAL forms.
+        """
+        start = f.tell() if f.seekable() else 0
+        for _ in range(cls.MAX_PICKLE_STREAMS):
+            memo, stack_strs = {}, []   # stack_strs mirrors string pushes feeding STACK_GLOBAL
+            saw_stop = False
+            for opcode, arg, pos in pickletools.genops(f):
+                if pos is not None and pos - start > cls.MAX_PICKLE_SCAN_BYTES:
+                    return
+                op = opcode.name
+                if op == "GLOBAL":
+                    module, _, name = str(arg).partition(" ")
+                    cls._classify_global(module, name, dangerous, unknown)
+                    stack_strs.clear()
+                elif op == "STACK_GLOBAL":
+                    if len(stack_strs) >= 2 and None not in stack_strs[-2:]:
+                        cls._classify_global(stack_strs[-2], stack_strs[-1], dangerous, unknown)
+                    else:
+                        unknown.add("<unresolved STACK_GLOBAL>")
+                    stack_strs.clear()
+                elif op in ("SHORT_BINUNICODE", "BINUNICODE", "BINUNICODE8", "UNICODE",
+                            "SHORT_BINSTRING", "BINSTRING", "STRING"):
+                    stack_strs.append(str(arg))
+                elif op == "MEMOIZE":
+                    memo[len(memo)] = stack_strs[-1] if stack_strs else None
+                elif op in ("PUT", "BINPUT", "LONG_BINPUT"):
+                    memo[arg] = stack_strs[-1] if stack_strs else None
+                elif op in ("GET", "BINGET", "LONG_BINGET"):
+                    stack_strs.append(memo.get(arg))
+                elif op == "STOP":
+                    saw_stop = True
+                    break
+                else:
+                    stack_strs.append(None)
+                del stack_strs[:-2]
+            if not saw_stop:
+                return
+            # Legacy torch format: more pickles follow until raw storage bytes.
+            peek = f.peek(1)[:1] if hasattr(f, "peek") else b""
+            if peek != b"\x80":
+                return

@@ -5,7 +5,9 @@ Performs memory-isolation invariant checks before runtime initialization.
 
 import os
 import time
-from typing import List, Dict, Any, Tuple
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
+from cryptography.hazmat.primitives import serialization
 from ztz.core.trust_store import TrustStore
 from ztz.core.crypto import ZTZVerifier
 from ztz.core.cache import AttestationCache
@@ -16,6 +18,36 @@ class PreFlightValidator:
         self.trust_store = trust_store
         self.use_cache = use_cache
         self.cache = AttestationCache() if use_cache else None
+
+    def close(self):
+        if self.cache:
+            self.cache.close()
+            self.cache = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def _cache_binding(self, sig_path: str, authority_name: str) -> Optional[str]:
+        """
+        Binds a cache row to the exact detached signature and the authority's current
+        public key, so replacing the .sig or revoking/rotating the key invalidates it.
+        """
+        auth = self.trust_store.get_authority(authority_name)
+        if auth is None:
+            return None
+        try:
+            with open(sig_path, "rb") as sf:
+                sig_bytes = sf.read()
+        except OSError:
+            return None
+        pub_der = auth["key"].public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return hashlib.sha256(sig_bytes + b"|" + pub_der).hexdigest()
 
     def validate_file(self, target_path: str, sig_path: str = None) -> Dict[str, Any]:
         """
@@ -60,7 +92,10 @@ class PreFlightValidator:
             return result
 
         if self.use_cache:
-            cached = self.cache.get_cached_attestation(target_path)
+            cached = self.cache.get_cached_attestation(
+                target_path,
+                binding_for=lambda name: self._cache_binding(sig_path, name),
+            )
             if cached:
                 result["key"] = cached["key"]
                 result["algo"] = cached["algo"]
@@ -77,7 +112,9 @@ class PreFlightValidator:
             )
             if is_valid:
                 if self.use_cache:
-                    self.cache.store_attestation(target_path, auth["name"], algo_or_err)
+                    binding = self._cache_binding(sig_path, auth["name"])
+                    if binding is not None:
+                        self.cache.store_attestation(target_path, auth["name"], algo_or_err, binding)
                 result["key"] = auth["name"]
                 result["algo"] = algo_or_err
                 result["status"] = "VERIFIED"
