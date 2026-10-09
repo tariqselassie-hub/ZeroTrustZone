@@ -5,6 +5,7 @@ import unittest
 
 from ztz import attested, guard, UntrustedPayloadError
 from ztz.core.crypto import ZTZSigner, generate_keypair
+from ztz.core.file_pin import FD_BINDING
 
 
 class TestSdk(unittest.TestCase):
@@ -25,7 +26,11 @@ class TestSdk(unittest.TestCase):
 
     def test_attested_yields_for_signed_file(self):
         with attested(self.model, trust_store=self.keys) as paths:
-            self.assertEqual(paths, [self.model])
+            self.assertEqual(len(paths), 1)
+            if FD_BINDING:
+                self.assertTrue(paths[0].startswith("/proc/self/fd/"))
+            else:
+                self.assertEqual(paths, [self.model])
 
     def test_attested_rejects_unsigned_before_block_runs(self):
         ran = False
@@ -73,6 +78,60 @@ class TestSdk(unittest.TestCase):
             with self.assertRaises(UntrustedPayloadError):
                 with attested(self.model, trust_store=self.keys):
                     pass
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_yielded_path_survives_swap_of_original(self):
+        with open(self.model, "rb") as f:
+            original = f.read()
+        with attested(self.model, trust_store=self.keys) as (load,):
+            os.replace(self.unsigned, self.model)
+            with open(load, "rb") as f:
+                self.assertEqual(f.read(), original)
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_guard_passes_descriptor_to_function(self):
+        @guard(trust_store=self.keys, targets=["path"])
+        def load(path):
+            return path
+
+        self.assertTrue(load(self.model).startswith("/proc/self/fd/"))
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_keep_names_yields_named_link_to_descriptor(self):
+        with open(self.model, "rb") as f:
+            original = f.read()
+        with attested(self.model, trust_store=self.keys, keep_names=True) as (load,):
+            self.assertEqual(os.path.basename(load), "model.onnx")
+            self.assertNotEqual(load, self.model)
+            self.assertTrue(os.readlink(load).startswith("/proc/self/fd/"))
+            os.replace(self.unsigned, self.model)
+            with open(load, "rb") as f:
+                self.assertEqual(f.read(), original)
+        self.assertFalse(os.path.exists(os.path.dirname(load)), "link dir must be removed")
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_keep_names_separates_same_name_files(self):
+        other_dir = os.path.join(self.tmp, "other")
+        os.mkdir(other_dir)
+        twin = os.path.join(other_dir, "model.onnx")
+        shutil.copy(self.model, twin)
+        shutil.copy(self.model + ".sig", twin + ".sig")
+        with attested(self.model, twin, trust_store=self.keys, keep_names=True) as (a, b):
+            self.assertEqual(os.path.basename(a), os.path.basename(b))
+            self.assertNotEqual(a, b)
+
+    @unittest.skipUnless(FD_BINDING, "descriptor binding is Linux-specific")
+    def test_guard_keep_names(self):
+        @guard(trust_store=self.keys, targets=["path"], keep_names=True)
+        def load(path):
+            return path
+
+        self.assertTrue(load(self.model).endswith("/model.onnx"))
+
+    @unittest.skipIf(FD_BINDING, "off Linux keep_names is a no-op")
+    def test_keep_names_is_noop_without_descriptor_binding(self):
+        with attested(self.model, trust_store=self.keys, keep_names=True) as paths:
+            self.assertEqual(paths, [self.model])
 
 
 if __name__ == "__main__":

@@ -20,8 +20,7 @@ class TestZeroTrustZoneExports(unittest.TestCase):
         from zerotrustzone.core.setup import init_environment
         from zerotrustzone.core.doctor import run_diagnostics
         from zerotrustzone.core.model_manager import discover_ollama_models, sign_model_target
-        from zerotrustzone.lic.fingerprint import HardwareFingerprint
-        from zerotrustzone.lic.manager import LicenseManager
+        from zerotrustzone.core.fingerprint import HardwareFingerprint
         from zerotrustzone.runners.llama_cpp import run_llama_protected
         from zerotrustzone.runners.proxy import run_proxy
         from zerotrustzone.ui.banners import print_header, print_audit_table
@@ -40,15 +39,15 @@ class TestZeroTrustZoneExports(unittest.TestCase):
     def test_alias_is_same_module_object(self):
         """zerotrustzone.* must be the very same module objects as ztz.*, not copies."""
         import ztz.core.crypto
-        import ztz.lic.manager
+        import ztz.core.file_pin
         import zerotrustzone
         import zerotrustzone.core.crypto
-        from zerotrustzone.lic import manager
+        from zerotrustzone.core import file_pin
 
         self.assertIs(zerotrustzone.core.crypto, ztz.core.crypto)
-        self.assertIs(manager, ztz.lic.manager)
+        self.assertIs(file_pin, ztz.core.file_pin)
         # Private helpers come through too (star-import shims dropped these).
-        self.assertIs(manager._canonical, ztz.lic.manager._canonical)
+        self.assertIs(file_pin._snapshot, ztz.core.file_pin._snapshot)
         self.assertIs(zerotrustzone.sdk, __import__("ztz.sdk").sdk)
 
     def test_alias_missing_attribute(self):

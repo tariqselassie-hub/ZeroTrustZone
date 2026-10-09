@@ -78,6 +78,18 @@ class TestModelFormatInspector(unittest.TestCase):
         self.assertEqual(rep.risk_level, "CRITICAL")
         self.assertTrue(any("pickle opcode" in w for w in rep.warnings))
 
+    def test_read_path_keeps_extension_checks_on_original_name(self):
+        """A pinned descriptor path has no extension; pickle detection must still use the real name."""
+        blob = os.path.join(self.tmp_dir.name, "blob")
+        with open(blob, "wb") as f:
+            f.write(b"\x80\x04\x95\x00\x00\x00\x00\x00\x00\x00\x00")
+            f.write(b"cos\nsystem\n(S'whoami'\ntR.")
+
+        rep = ModelFormatInspector.inspect("malicious_weights.pt", read_path=blob)
+        self.assertEqual(rep.format, "PYTORCH_PICKLE")
+        self.assertEqual(rep.risk_level, "CRITICAL")
+        self.assertEqual(rep.file_path, "malicious_weights.pt")
+
     def test_missing_and_truncated_files(self):
         """Verify missing and truncated files are safely quarantined."""
         missing_rep = ModelFormatInspector.inspect(os.path.join(self.tmp_dir.name, "nonexistent.gguf"))

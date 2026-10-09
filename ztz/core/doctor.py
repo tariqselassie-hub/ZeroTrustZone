@@ -13,7 +13,7 @@ from typing import Dict, Any, List
 
 from ztz.core.trust_store import TrustStore, default_search_paths, find_private_key
 from ztz.core.model_manager import get_ollama_base_dir, discover_ollama_models
-from ztz.lic.fingerprint import HardwareFingerprint
+from ztz.core.fingerprint import HardwareFingerprint
 from ztz.core.context_shield import SECRET_PATTERNS
 from ztz.core.cache import AttestationCache, CACHE_DB_PATH
 

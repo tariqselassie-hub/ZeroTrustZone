@@ -16,13 +16,12 @@ env/
 venv/
 ENV/
 
-# Sensitive key material and generated licenses
+# Sensitive key material
 *.pem
 !*pub.pem
 !*pub.ed25519
 *.key
 *.priv
-*.lic
 
 # Test artifacts & caches
 .pytest_cache/

@@ -5,13 +5,16 @@ and halts execution before process memory allocation if invariants are violated.
 """
 
 import os
+import re
 import sys
 import shutil
 import subprocess
-from typing import List
+from typing import Dict, Iterator, List, Optional, Tuple
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
-from ztz.core.file_pin import pin_files, unpin_files
+from ztz.core.file_pin import (
+    FD_BINDING, NamedLinks, changed_files, load_paths, pass_fds, pin_files, unpin_files,
+)
 from ztz.ui.banners import (
     print_header,
     print_phase,
@@ -57,12 +60,12 @@ def _split_flag(arg: str):
         return flag, value
     return arg, None
 
-def extract_target_files(args: List[str]) -> List[str]:
+def _iter_file_args(args: List[str]) -> Iterator[Tuple[int, str, str, bool]]:
     """
-    Extracts every file llama.cpp would load from its CLI arguments (see FILE_FLAGS).
+    Yields (index, flag, path, inline) for every file argument; inline means
+    args[index] is '--flag=path', otherwise args[index] is the path itself.
     Raises ValueError on argument injection or on remote-fetch flags (see REMOTE_FLAGS).
     """
-    targets = []
     i = 0
     while i < len(args):
         flag, value = _split_flag(args[i])
@@ -71,22 +74,68 @@ def extract_target_files(args: List[str]) -> List[str]:
                 f"Remote model fetch '{flag}' is forbidden: weights must be local and attested"
             )
         if flag in FILE_FLAGS:
-            if value is None:
+            inline = value is not None
+            if not inline:
                 if i + 1 >= len(args):
                     raise ValueError(f"Flag '{flag}' is missing its file path")
                 value = args[i + 1]
                 i += 1
             if value.startswith("-"):
                 raise ValueError(f"Argument Injection Detected: Expected file path, got flag '{value}'")
-            targets.append(value)
+            yield i, flag, value, inline
         i += 1
-    return targets
+
+def extract_target_files(args: List[str]) -> List[str]:
+    """
+    Extracts every file llama.cpp would load from its CLI arguments (see FILE_FLAGS).
+    Raises ValueError on argument injection or on remote-fetch flags (see REMOTE_FLAGS).
+    """
+    return [path for _, _, path, _ in _iter_file_args(args)]
+
+def bind_target_files(args: List[str], mapping: Dict[str, str]) -> List[str]:
+    """Returns a copy of args with every file argument replaced by mapping[path]."""
+    bound = list(args)
+    for i, flag, path, inline in _iter_file_args(args):
+        new = mapping.get(path, path)
+        bound[i] = f"{flag}={new}" if inline else new
+    return bound
+
+# llama.cpp only loads sibling shards when the given path is the first split,
+# named exactly <prefix>-00001-of-NNNNN.gguf (llama_split_prefix), and then opens
+# <prefix>-0000i-of-NNNNN.gguf by name.
+_SPLIT_HEAD = re.compile(r"^(?P<prefix>.+)-00001-of-(?P<count>\d{5})\.gguf$")
+
+def split_shards(path: str) -> List[str]:
+    """All shards llama.cpp would load for path (just [path] if it is not a split head)."""
+    m = _SPLIT_HEAD.match(path)
+    if not m or int(m["count"]) < 2:
+        return [path]
+    count = int(m["count"])
+    return [f"{m['prefix']}-{i:05d}-of-{count:05d}.gguf" for i in range(1, count + 1)]
+
+def expand_split_targets(targets: List[str]) -> List[str]:
+    """targets plus every sibling shard of split GGUF heads, in order, without duplicates."""
+    return list(dict.fromkeys(s for t in targets for s in split_shards(t)))
+
+def _link_split_shards(targets: List[str], bound: Dict[str, str]) -> Optional[NamedLinks]:
+    """
+    Linux: the runtime gets /proc/self/fd/N paths, which carry no shard name, so
+    llama.cpp could not find a split model's siblings. Give each split head a
+    NamedLinks folder of shard-named links to the pinned descriptors and point the
+    head's argument there (updates bound in place). None if there is no split.
+    """
+    heads = [t for t in dict.fromkeys(targets) if len(split_shards(t)) > 1]
+    if not FD_BINDING or not heads:
+        return None
+    links = NamedLinks((split_shards(h) for h in heads), bound)
+    for head in heads:
+        bound[head] = links.paths[head]
+    return links
 
 def run_llama_protected(
     llama_bin: str,
     safe_args: List[str],
     trust_store: TrustStore,
-    operating_mode: str = "COMMUNITY",
     use_cache: bool = True,
 ) -> int:
     """
@@ -114,9 +163,12 @@ def run_llama_protected(
         # Explicit shell=False to satisfy taint algebra projection
         return subprocess.run(cmd, check=False, shell=False, close_fds=True).returncode  # karnak: ignore
 
+    # Sibling shards of a split GGUF are loaded too, so they are attested and pinned too.
+    files = expand_split_targets(targets)
+
     # TOCTOU Protection: pin files before validation, hold until the runtime exits
     try:
-        pins = pin_files(targets)
+        pins = pin_files(files)
     except OSError as e:
         print_lockdown_banner(
             failed_target=e.filename or "<unknown>",
@@ -124,9 +176,11 @@ def run_llama_protected(
                    "Another process may have it open for writing.",
         )
         return 1
+    split_links = None
     try:
-        validator = PreFlightValidator(trust_store, use_cache=use_cache)
-        all_clean, rows, elapsed = validator.audit_batch(targets)
+        bound = load_paths(pins)
+        with PreFlightValidator(trust_store, use_cache=use_cache) as validator:
+            all_clean, rows, elapsed = validator.audit_batch(files, read_paths=bound)
 
         # Print the structured Unicode audit table
         print_audit_table(rows)
@@ -146,7 +200,6 @@ def run_llama_protected(
                 passed=passed_count,
                 failed=failed_count,
                 duration_sec=elapsed,
-                mode=operating_mode,
             )
             # Abort before memory allocation
             return 1
@@ -157,17 +210,30 @@ def run_llama_protected(
             passed=passed_count,
             failed=failed_count,
             duration_sec=elapsed,
-            mode=operating_mode,
         )
 
+        split_links = _link_split_shards(targets, bound)
+
+        changed = changed_files(pins)
+        if changed or (split_links and not split_links.intact()):
+            print_lockdown_banner(
+                failed_target=changed[0] if changed else split_links.root,
+                reason="MODIFIED_AFTER_PIN: file changed or was replaced during verification",
+            )
+            return 1
+
         print_phase(2, f"Passing Execution to Runtime Binary: {os.path.basename(safe_bin)}")
-        cmd = [safe_bin] + safe_args
-        
-        proc = subprocess.Popen(cmd, shell=False, close_fds=True)
+        # Linux: the runtime opens the verified descriptors (/proc/self/fd/N), not the paths;
+        # split heads point into split_links, whose shard-named links lead to the descriptors.
+        cmd = [safe_bin] + bind_target_files(safe_args, bound)
+
+        proc = subprocess.Popen(cmd, shell=False, close_fds=True, pass_fds=pass_fds(pins))
         proc.wait()
         return proc.returncode
     except FileNotFoundError:
         print(f"\n[ZTZ ERROR] Target inference binary not found: {llama_bin}", file=sys.stderr)
         return 127
     finally:
+        if split_links:
+            split_links.close()
         unpin_files(pins)

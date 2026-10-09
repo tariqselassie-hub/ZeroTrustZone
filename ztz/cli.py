@@ -11,8 +11,7 @@ Commands:
   - inspect-model: Inspect GGUF / Safetensors / PyTorch weights for bytecode risks
   - context-scan: Scan prompt or context file for leaked secrets & tokens
   - keygen: Generate Ed25519 or RSA-PSS keypair
-  - fingerprint: Display anonymous, deterministic local hardware hash
-  - license: Inspect or test air-gapped machine license
+  - fingerprint: Display the anonymous hardware hash the cache is bound to
   - cache: Manage the instant attestation cache
 """
 
@@ -40,8 +39,7 @@ from ztz.core.model_manager import (
     sign_model_target,
     resolve_model_target,
 )
-from ztz.lic.fingerprint import HardwareFingerprint
-from ztz.lic.manager import LicenseManager
+from ztz.core.fingerprint import HardwareFingerprint
 from ztz.runners.llama_cpp import run_llama_protected
 from ztz.runners.proxy import run_proxy
 from ztz.ui.banners import (
@@ -142,20 +140,22 @@ def cmd_models(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
     trust_store = TrustStore([args.trust_store] if args.trust_store else None)
-    
-    lic_mgr = LicenseManager(custom_lic_path=args.license)
-    is_licensed, lic_status, _ = lic_mgr.verify_license()
-    operating_mode = "PRO ($0.99 Machine-Bound)" if is_licensed else "COMMUNITY (FOSS)"
-
     return run_llama_protected(
         llama_bin=args.llama_bin,
         safe_args=passthrough,
         trust_store=trust_store,
-        operating_mode=operating_mode,
         use_cache=not args.no_cache,
     )
 
+def _redirect_output(log_file: str):
+    """Send stdout/stderr to log_file (append, line-buffered); used when running as a service."""
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+    log = open(log_file, "a", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stderr = log
+
 def cmd_proxy(args: argparse.Namespace) -> int:
+    if args.log_file:
+        _redirect_output(args.log_file)
     try:
         run_proxy(
             host=args.host,
@@ -227,62 +227,9 @@ def cmd_fingerprint(args: argparse.Namespace) -> int:
     fp = HardwareFingerprint.compute_fingerprint()
     print(f"Raw Components  : {raw}")
     print(f"Machine Hash    : {fp}")
-    print("\nNote: This anonymous hash is bound 1-to-1 to this hardware for the $0.99 Pro license.")
+    print("\nNote: This hash keys the attestation cache to this machine; copied cache rows fail on other hosts.")
     print("Zero personal data or telemetry is transmitted.\n")
     return 0
-
-def cmd_license_issue(args: argparse.Namespace) -> int:
-    import time
-    import uuid
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-    from ztz.lic.manager import DEFAULT_VENDOR_PRIV_KEY_PATH
-
-    key_path = args.vendor_key or DEFAULT_VENDOR_PRIV_KEY_PATH
-    try:
-        with open(key_path, "rb") as kf:
-            pem = kf.read()
-        try:
-            vendor_priv = serialization.load_pem_private_key(pem, password=None)
-        except TypeError:
-            import getpass
-            passphrase = os.environ.get("ZTZ_VENDOR_KEY_PASSPHRASE") or getpass.getpass("Vendor key passphrase: ")
-            vendor_priv = serialization.load_pem_private_key(pem, password=passphrase.encode("utf-8"))
-    except Exception as e:
-        print(f"[ERROR] Could not load vendor private key '{key_path}': {e}", file=sys.stderr)
-        return 1
-    if not isinstance(vendor_priv, ed25519.Ed25519PrivateKey):
-        print("[ERROR] Vendor key must be Ed25519.", file=sys.stderr)
-        return 1
-
-    token = LicenseManager.issue_token(
-        license_id=args.id or f"ZTZ-{uuid.uuid4().hex[:12].upper()}",
-        tier=args.tier,
-        machine_fingerprint=args.fingerprint,
-        issued_at=int(time.time()),
-        vendor_priv_key=vendor_priv,
-    )
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(token, f, indent=2)
-        print(f"[SUCCESS] License {token['license_id']} ({args.tier}) written to: {args.out}")
-    else:
-        print(json.dumps(token, indent=2))
-    return 0
-
-def cmd_license(args: argparse.Namespace) -> int:
-    if getattr(args, "license_action", None) == "issue":
-        return cmd_license_issue(args)
-    print_header(title="ZTZ — LICENSE SENTINEL", subtitle="Air-Gapped Offline Token Verifier")
-    lic_mgr = LicenseManager(custom_lic_path=args.license)
-    is_valid, msg, meta = lic_mgr.verify_license()
-    print(f"Status           : {'VALID' if is_valid else 'UNLICENSED'}")
-    print(f"Message          : {msg}")
-    if meta:
-        for k, v in meta.items():
-            if k != "signature":
-                print(f"  {k:<15}: {v}")
-    return 0 if is_valid else 1
 
 def cmd_cache(args: argparse.Namespace) -> int:
     if args.action == "clear":
@@ -294,12 +241,23 @@ def cmd_cache(args: argparse.Namespace) -> int:
     return 1
 
 def cmd_service(args: argparse.Namespace) -> int:
-    print(
-        f"[ERROR] 'ztz service {args.action}' is not implemented yet. "
-        "Run 'ztz proxy' under your platform's service manager instead.",
-        file=sys.stderr,
-    )
-    return 2
+    from ztz.runners import service
+    try:
+        if args.action == "install":
+            cfg = service.ServiceConfig(
+                host=args.host,
+                port=args.port,
+                upstream_port=args.upstream_port,
+                trust_store=args.trust_store,
+                no_cache=args.no_cache,
+            )
+            return service.install(cfg, start=not args.no_start, dry_run=args.dry_run)
+        if args.action == "uninstall":
+            return service.uninstall()
+        return service.status()
+    except (OSError, ValueError) as e:
+        print(f"[ERROR] ztz service {args.action} failed: {e}", file=sys.stderr)
+        return 1
 
 def cmd_inspect_model(args: argparse.Namespace) -> int:
     from ztz.core.model_inspector import ModelFormatInspector
@@ -412,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     proxy_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend")
     proxy_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
     proxy_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    proxy_p.add_argument("--log-file", default=None, help="Append all output to this file instead of the console")
 
     # Sign subparser
     sign_p = subparsers.add_parser("sign", help="Sign a model weight or context payload")
@@ -437,24 +396,20 @@ def build_parser() -> argparse.ArgumentParser:
     # Fingerprint subparser
     subparsers.add_parser("fingerprint", help="Display local anonymous hardware fingerprint")
 
-    # License subparser
-    lic_p = subparsers.add_parser("license", help="Verify offline license status")
-    lic_p.add_argument("--license", default=None, help="Path to ztz.lic file")
-    lic_sub = lic_p.add_subparsers(dest="license_action")
-    lic_issue_p = lic_sub.add_parser("issue", help="[Vendor] Sign a machine-bound license token")
-    lic_issue_p.add_argument("--fingerprint", required=True, help="Target machine hash (from 'ztz fingerprint')")
-    lic_issue_p.add_argument("--tier", default="pro", help="License tier (default: pro)")
-    lic_issue_p.add_argument("--id", default=None, help="License ID (default: random ZTZ-XXXXXXXXXXXX)")
-    lic_issue_p.add_argument("--vendor-key", default=None, help="Vendor Ed25519 private key (default: ~/.ztz/vendor/vendor_priv.pem)")
-    lic_issue_p.add_argument("--out", default=None, help="Write token to this .lic path instead of stdout")
-
     # Cache subparser
     cache_p = subparsers.add_parser("cache", help="Manage the instant attestation cache")
     cache_p.add_argument("action", choices=["clear"], help="Action to perform (e.g. clear)")
 
     # Service subparser
-    svc_p = subparsers.add_parser("service", help="Manage the ZTZ background daemon (not yet implemented)")
-    svc_p.add_argument("action", choices=["install"], help="Action to perform")
+    svc_p = subparsers.add_parser("service", help="Run the ZTZ proxy as a per-user background service")
+    svc_p.add_argument("action", choices=["install", "uninstall", "status"], help="Action to perform")
+    svc_p.add_argument("--host", default="127.0.0.1", help="Host for the proxy to bind")
+    svc_p.add_argument("--port", type=int, default=11434, help="Port the proxy listens on (default 11434)")
+    svc_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend (default 11435)")
+    svc_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
+    svc_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    svc_p.add_argument("--no-start", action="store_true", help="Install without starting it now")
+    svc_p.add_argument("--dry-run", action="store_true", help="Print the service definition and commands only")
 
     # Inspect-model subparser
     inspect_p = subparsers.add_parser("inspect-model", help="Inspect GGUF / Safetensors / PyTorch weights for structural safety & bytecode risks")
@@ -472,13 +427,12 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_run_options(p: argparse.ArgumentParser):
     p.add_argument("--llama-bin", default="./llama-cli", help="Path to llama-cli / llama.cpp binary")
     p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
-    p.add_argument("--license", default=None, help="Path to custom ztz.lic file")
     p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
 
 def build_run_parser() -> argparse.ArgumentParser:
     """
     Parser for `ztz run` passthrough mode. No -h and no prefix abbreviation, so
-    llama.cpp flags such as -hf or --lic... reach the pre-flight guard untouched.
+    llama.cpp flags such as -hf or --lora... reach the pre-flight guard untouched.
     """
     p = argparse.ArgumentParser(prog="ztz run", add_help=False, allow_abbrev=False)
     _add_run_options(p)
@@ -505,7 +459,6 @@ def main():
             "verify": cmd_verify,
             "keygen": cmd_keygen,
             "fingerprint": cmd_fingerprint,
-            "license": cmd_license,
             "cache": cmd_cache,
             "service": cmd_service,
             "inspect-model": cmd_inspect_model,
@@ -531,11 +484,6 @@ def sign_cli():
 def verify_cli():
     """Entrypoint for `ztz-verify` script."""
     sys.argv.insert(1, "verify")
-    main()
-
-def license_cli():
-    """Entrypoint for `ztz-lic` script."""
-    sys.argv.insert(1, "license")
     main()
 
 if __name__ == "__main__":

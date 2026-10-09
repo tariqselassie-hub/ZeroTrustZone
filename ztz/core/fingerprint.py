@@ -1,5 +1,6 @@
 """
-Cross-platform anonymous hardware fingerprinting for ZTZ Pro.
+Cross-platform anonymous hardware fingerprinting for ZTZ.
+Binds attestation cache rows to this machine (see ztz.core.cache).
 Generates an irreversible, deterministic hardware hash without collecting personally identifiable information.
 """
 

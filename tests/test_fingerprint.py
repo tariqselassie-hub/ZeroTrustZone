@@ -1,5 +1,5 @@
 import unittest
-from ztz.lic.fingerprint import HardwareFingerprint
+from ztz.core.fingerprint import HardwareFingerprint
 
 class TestHardwareFingerprint(unittest.TestCase):
     def test_fingerprint_deterministic(self):

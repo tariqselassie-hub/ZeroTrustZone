@@ -24,10 +24,11 @@ ZTZ intercepts local LLM execution (`llama.cpp` via `ztz run`, Ollama / LM Studi
 1. **Pre-Memory Quarantine**: Runs mathematically strictly before `llama.cpp` or Ollama allocates tensors. If verification fails, pointers are never created and execution halts instantly.
 2. **Anti-TOCTOU File Pinning**: `ztz run` and the SDK's `attested` / `@guard` pin every input file *before* verification and hold it until the runtime exits (or the SDK block ends), so the bytes loaded are the bytes attested.
    - **Windows**: mandatory. Files are opened read-share-only, so the OS refuses any other process's attempt to write, rename or delete them. If another process already has a file open for writing, ZTZ aborts instead of verifying.
-   - **Linux/macOS**: advisory shared `flock`. This only stops processes that also take locks.
+   - **Linux**: descriptor-bound. Each file is opened once; verification and the runtime both read that open descriptor (`/proc/self/fd/N`), so renaming, deleting or swapping the path after launch has no effect on what gets loaded. Any write to, or swap of, the file between pinning and launch is detected and aborts the launch; writes to the same file after launch are not prevented. An exclusive `flock` held by another process also aborts.
+   - **macOS**: advisory shared `flock`, plus the same pre-launch check that the file was not modified or swapped during verification. The runtime still opens the path.
 3. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
 4. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
-5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
+5. **Machine-Bound O(1) Cache**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
 
 ---
 
@@ -100,12 +101,20 @@ ztz models inspect llama3.2
 ztz verify models/qwen2.5-7b-instruct-q4_k_m.gguf
 ```
 
-### 5. Start the Zero-Trust Reverse Proxy (Pro Tier)
+### 5. Start the Zero-Trust Reverse Proxy
 To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:
 ```bash
 ztz proxy --port 11434 --upstream-port 11435
 ```
 ZTZ transparently intercepts incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime. Prompts and chat messages are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
+
+To keep the proxy running in the background, install it as a per-user service (systemd user unit on Linux, launchd agent on macOS, hidden logon task on Windows; no admin rights needed). Then move Ollama to the upstream port, e.g. `OLLAMA_HOST=127.0.0.1:11435`:
+```bash
+ztz service install            # add --dry-run to preview, --no-start to install without starting
+ztz service status
+ztz service uninstall
+```
+Service output goes to `~/.ztz/logs/proxy.log`.
 
 ### 6. Run `llama.cpp` under Pre-Flight Protection
 ```bash
@@ -114,6 +123,8 @@ ztz run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f pro
 If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical lockdown banner before `llama-cli` starts.
 
 Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (`--lora`, `--lora-scaled`), draft/vocoder models (`-md`, `-mv`), multimodal projectors (`--mmproj`), control vectors, and context files (`--system-prompt-file`, `--grammar-file`, `--json-schema-file`, `--chat-template-file`, `-bf`). Flags that download weights at runtime (`-hf`, `-hff`, `-mu`, `--docker-repo`, `--mmproj-url`, …) are refused outright. All other arguments, including `--help`, are passed straight to the llama binary.
+
+Split GGUF models are covered too: for `-m model-00001-of-00003.gguf`, every shard llama.cpp would load (`-00002-of-00003`, `-00003-of-00003`) must be present and carry its own valid `.sig` (sign each shard with `ztz sign`), and all of them are pinned. On Linux, llama.cpp reaches the shards through a private directory of shard-named symlinks to the pinned descriptors; ZTZ re-checks those links just before launch, but a process running as the same user could still swap them in the moment before llama.cpp opens the shards.
 
 ### 7. Pre-Flight Context Scanning & Secret Scrubbing
 Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), OpenAI and Anthropic API keys (including long `sk-proj-` / `sk-ant-api03-` keys, always masked in full), GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments:
@@ -159,17 +170,19 @@ assert all_clean, "Quarantined! Untrusted model or context detected."
 
 Each row's `status` is `VERIFIED` / `VERIFIED_CACHE` on success, or one of `MISSING`, `UNSAFE_FORMAT`, `NO_SIG`, `NO_ROOTS`, `TAMPERED`.
 
-Load any in-process runtime (ONNX Runtime, Safetensors, PyTorch...) inside an attested block. The files are pinned, verified, and stay pinned until the block exits:
+Load any in-process runtime (ONNX Runtime, Safetensors, PyTorch...) inside an attested block. The files are pinned, verified, and stay pinned until the block exits. Load the paths the block yields, not the originals: on Linux they are the verified descriptors (`/proc/self/fd/N`); elsewhere they are the same paths you passed in.
 
 ```python
 import onnxruntime
 import ztz
 
-with ztz.attested("models/model.onnx"):
-    session = onnxruntime.InferenceSession("models/model.onnx")
+with ztz.attested("models/model.onnx") as (model,):
+    session = onnxruntime.InferenceSession(model)
 ```
 
-Or guard a function so its file arguments are attested and pinned while it runs:
+Loaders that pick a format from the file extension will not see one on a `/proc/self/fd/N` path. Either pass them the format explicitly, or use `keep_names=True` (on `attested` or `@guard`): on Linux this yields `<private dir>/model.onnx`, a symlink to the verified descriptor, so the extension survives. The trade-off is that a process running as the same user could swap that symlink in the moment before the loader opens it; bare descriptor paths do not have that gap. Off Linux, `keep_names` changes nothing.
+
+Or guard a function so its file arguments are attested and pinned while it runs. The guarded arguments are replaced with the yielded paths:
 
 ```python
 import ztz
@@ -187,24 +200,7 @@ except UntrustedPayloadError as e:
 
 ---
 
-## Dual-Tier & Licensing Model
-
-| Feature | Community (FOSS) | Pro / Power User ($19-$29) | Enterprise ($15-$30/mo/seat) |
-| :--- | :--- | :--- | :--- |
-| **Inference Gate** | `llama.cpp` CLI wrapper | **Ollama / LM Studio API Proxy** | gRPC / Remote Sockets |
-| **Verification** | Full SHA-256 stream | **Instant Merkle / Inode Cache** | Cosign / Sigstore Integration |
-| **Key Management** | Local folder drops | HF Auto-Sign & Fetch | Centralized IAM / KMS |
-| **Monitoring** | Manual Execution | Background Model Daemon | Central SIEM Audit Logging |
-| **Developer SDK** | None | Python `@ztz.guard` | CI/CD Build Pipelines |
-
-To view your local machine's anonymous hardware fingerprint (for Pro licensing):
-```bash
-ztz fingerprint
-```
-
----
-
 ## License
-ZeroTrustZone (ZTZ Core) is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for more details. 
+ZeroTrustZone is fully open source under the Apache License, Version 2.0; every feature in this README is included. See [LICENSE](LICENSE) for details.
 
 For information on open-source libraries used in this project, please refer to the [Third-Party Notices](THIRDPARTY.md).

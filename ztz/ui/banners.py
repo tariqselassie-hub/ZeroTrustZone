@@ -82,15 +82,13 @@ def print_lockdown_banner(failed_target: str, reason: str = "Cryptographic invar
     print(f"║ Security Rule   : Unattested inputs strictly quarantined from hardware.{' ' * (width - 73)}║")
     print(f"╚{'═' * width}╝\n")
 
-def print_summary_card(status: str, total_checked: int, passed: int, failed: int, duration_sec: float, mode: str = "COMMUNITY"):
+def print_summary_card(status: str, total_checked: int, passed: int, failed: int, duration_sec: float):
     width = 78
     print(f"\n╔{'═' * width}╗")
     print(f"║                       ZTZ AUDIT SUMMARY                               ║")
     print(f"╠{'═' * width}╣")
     status_str = f"Status           : {status}"
     print(f"║ {status_str:<{width-2}} ║")
-    mode_str = f"Operating Mode   : {mode}"
-    print(f"║ {mode_str:<{width-2}} ║")
     counts_str = f"Assets Audited   : {total_checked} (Passed: {passed}, Failed: {failed})"
     print(f"║ {counts_str:<{width-2}} ║")
     time_str = f"Duration         : {duration_sec:.4f}s"

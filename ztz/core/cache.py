@@ -1,5 +1,5 @@
 """
-Instant Model Attestation Cache for ZTZ Pro.
+Instant Model Attestation Cache for ZTZ.
 Eliminates full SHA-256 streaming on warm model loads by caching inode/mtime/size
 and cryptographically binding the cache row to the local machine fingerprint via HMAC.
 """
@@ -11,7 +11,7 @@ import hmac
 import hashlib
 import pathlib
 from typing import Callable, Optional
-from ztz.lic.fingerprint import HardwareFingerprint
+from ztz.core.fingerprint import HardwareFingerprint
 
 CACHE_DB_PATH = os.path.expanduser("~/.ztz/cache.db")
 
@@ -65,17 +65,25 @@ class AttestationCache:
         payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}:{binding}".encode('utf-8')
         return hmac.new(self.machine_key, payload, hashlib.sha256).hexdigest()
 
-    def get_cached_attestation(self, file_path: str, binding_for: Optional[Callable[[str], Optional[str]]] = None):
+    def get_cached_attestation(
+        self,
+        file_path: str,
+        binding_for: Optional[Callable[[str], Optional[str]]] = None,
+        stat_path: Optional[str] = None,
+    ):
         """
         Returns the cached attestation for file_path, or None on any miss.
         binding_for(auth_key) must reproduce the binding passed to store_attestation
         (e.g. a digest of the .sig and the authority's public key); returning None
         means the authority is no longer trusted and forces a miss.
+        stat_path (e.g. a pinned /proc/self/fd/N) is stat'ed instead of file_path, so
+        the hit describes the file that will actually be loaded.
         """
-        if not os.path.exists(file_path):
+        stat_path = stat_path or file_path
+        if not os.path.exists(stat_path):
             return None
             
-        stat = os.stat(file_path)
+        stat = os.stat(stat_path)
         size, mtime_ns = stat.st_size, stat.st_mtime_ns
         inode = self._resolve_inode(file_path, stat.st_ino)
         
@@ -109,10 +117,12 @@ class AttestationCache:
             "error": None
         }
 
-    def store_attestation(self, file_path: str, auth_key: str, algo: str, binding: str = ""):
-        if not os.path.exists(file_path):
+    def store_attestation(self, file_path: str, auth_key: str, algo: str, binding: str = "",
+                          stat_path: Optional[str] = None):
+        stat_path = stat_path or file_path
+        if not os.path.exists(stat_path):
             return
-        stat = os.stat(file_path)
+        stat = os.stat(stat_path)
         size, mtime_ns = stat.st_size, stat.st_mtime_ns
         inode = self._resolve_inode(file_path, stat.st_ino)
         
