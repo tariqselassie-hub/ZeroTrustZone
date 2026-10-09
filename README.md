@@ -8,7 +8,7 @@
 
 > 📖 **Full documentation is available in the [`docs/` folder](docs/index.md).**
 
-ZTZ intercepts local LLM execution (e.g. `llama.cpp`, Ollama, ONNX runtimes) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, ZTZ ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
+ZTZ intercepts local LLM execution (`llama.cpp` via `ztz run`, Ollama / LM Studio via `ztz proxy`, and in-process runtimes such as ONNX Runtime, Safetensors or PyTorch via the Python SDK) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, ZTZ ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
 
 ```text
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -159,7 +159,17 @@ assert all_clean, "Quarantined! Untrusted model or context detected."
 
 Each row's `status` is `VERIFIED` / `VERIFIED_CACHE` on success, or one of `MISSING`, `UNSAFE_FORMAT`, `NO_SIG`, `NO_ROOTS`, `TAMPERED`.
 
-Guard a function so its file arguments must be attested before it runs:
+Load any in-process runtime (ONNX Runtime, Safetensors, PyTorch...) inside an attested block. The files are pinned, verified, and stay pinned until the block exits:
+
+```python
+import onnxruntime
+import ztz
+
+with ztz.attested("models/model.onnx"):
+    session = onnxruntime.InferenceSession("models/model.onnx")
+```
+
+Or guard a function so its file arguments are attested and pinned while it runs:
 
 ```python
 import ztz
