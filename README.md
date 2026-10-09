@@ -180,7 +180,7 @@ with ztz.attested("models/model.onnx") as (model,):
     session = onnxruntime.InferenceSession(model)
 ```
 
-Loaders that pick a format from the file extension will not see one on a `/proc/self/fd/N` path, so pass the format explicitly to those.
+Loaders that pick a format from the file extension will not see one on a `/proc/self/fd/N` path. Either pass them the format explicitly, or use `keep_names=True` (on `attested` or `@guard`): on Linux this yields `<private dir>/model.onnx`, a symlink to the verified descriptor, so the extension survives. The trade-off is that a process running as the same user could swap that symlink in the moment before the loader opens it; bare descriptor paths do not have that gap. Off Linux, `keep_names` changes nothing.
 
 Or guard a function so its file arguments are attested and pinned while it runs. The guarded arguments are replaced with the yielded paths:
 

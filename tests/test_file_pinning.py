@@ -397,11 +397,11 @@ class TestSplitModels(unittest.TestCase):
         real_link = llama_cpp._link_split_shards
 
         def link_then_swap(targets, bound):
-            root, links = real_link(targets, bound)
-            victim = next(link for link in links if "00002" in link)
+            named = real_link(targets, bound)
+            victim = next(link for link in named.links if "00002" in link)
             os.remove(victim)
             os.symlink(self.shards[1], victim)  # point at the path instead of the pinned fd
-            return root, links
+            return named
 
         with patch.object(llama_cpp, "_link_split_shards", link_then_swap), \
              patch.object(llama_cpp.subprocess, "Popen") as popen:

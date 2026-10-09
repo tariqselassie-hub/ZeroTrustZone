@@ -13,9 +13,11 @@ still what gets loaded.
 """
 
 import os
+import shutil
 import stat
 import sys
-from typing import Any, Dict, List, Optional
+import tempfile
+from typing import Any, Dict, Iterable, List, Optional
 
 # /proc/self/fd/N reopens the pinned inode with an independent file offset.
 # macOS /dev/fd/N dup()s instead (shared offset), so it is not used there.
@@ -147,6 +149,54 @@ def changed_files(pins: List[Pin]) -> List[str]:
 def pass_fds(pins: List[Pin]) -> tuple:
     """Descriptors a child process must inherit to open the load paths."""
     return tuple(pin.fd for pin in pins if FD_BINDING and pin.fd is not None)
+
+
+class NamedLinks:
+    """
+    A private 0700 directory of symlinks that carry the original file names but
+    point at pinned descriptors (/proc/self/fd/N), for loaders that need a real
+    name: extension sniffing, or llama.cpp finding split shards next to the head.
+
+    Each group becomes one subdirectory, so files that must sit side by side
+    (shards) share one and same-named files from different folders never collide.
+    Residual risk: a process running as the same user can replace a link between
+    intact() and the loader opening it; plain descriptor paths have no such gap.
+    """
+
+    def __init__(self, groups: Iterable[Iterable[str]], bound: Dict[str, str]):
+        self.root = tempfile.mkdtemp(prefix="ztz-pin-")
+        self.links: Dict[str, str] = {}  # link -> descriptor path
+        self.paths: Dict[str, str] = {}  # original path -> link
+        try:
+            for n, group in enumerate(groups):
+                folder = os.path.join(self.root, str(n))
+                os.mkdir(folder, 0o700)
+                for original in group:
+                    link = os.path.join(folder, os.path.basename(original))
+                    os.symlink(bound[original], link)
+                    self.links[link] = bound[original]
+                    self.paths[original] = link
+        except BaseException:
+            self.close()
+            raise
+
+    def intact(self) -> bool:
+        """True if every link still points at its own pinned descriptor."""
+        try:
+            return all(os.readlink(link) == target for link, target in self.links.items())
+        except OSError:
+            return False
+
+    def close(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def group_by_dir(paths: Iterable[str]) -> List[List[str]]:
+    """Groups paths (deduplicated, order kept) by their containing directory."""
+    groups: Dict[str, List[str]] = {}
+    for p in dict.fromkeys(paths):
+        groups.setdefault(os.path.dirname(os.path.abspath(p)), []).append(p)
+    return list(groups.values())
 
 
 def unpin_files(pins: List[Pin]):

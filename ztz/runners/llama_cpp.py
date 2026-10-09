@@ -9,11 +9,12 @@ import re
 import sys
 import shutil
 import subprocess
-import tempfile
 from typing import Dict, Iterator, List, Optional, Tuple
 from ztz.core.trust_store import TrustStore
 from ztz.core.validator import PreFlightValidator
-from ztz.core.file_pin import FD_BINDING, changed_files, load_paths, pass_fds, pin_files, unpin_files
+from ztz.core.file_pin import (
+    FD_BINDING, NamedLinks, changed_files, load_paths, pass_fds, pin_files, unpin_files,
+)
 from ztz.ui.banners import (
     print_header,
     print_phase,
@@ -116,38 +117,20 @@ def expand_split_targets(targets: List[str]) -> List[str]:
     """targets plus every sibling shard of split GGUF heads, in order, without duplicates."""
     return list(dict.fromkeys(s for t in targets for s in split_shards(t)))
 
-def _link_split_shards(targets: List[str], bound: Dict[str, str]) -> Tuple[Optional[str], Dict[str, str]]:
+def _link_split_shards(targets: List[str], bound: Dict[str, str]) -> Optional[NamedLinks]:
     """
     Linux: the runtime gets /proc/self/fd/N paths, which carry no shard name, so
-    llama.cpp could not find a split model's siblings. For each split head, build a
-    private directory of symlinks named like the shards, each pointing at its
-    pinned descriptor, and point the head's argument at it (updates bound in place).
-    Returns (directory to remove after the run or None, {symlink: descriptor path}).
-
-    Residual risk: a process running as the same user can still replace these
-    symlinks between the pre-launch check and llama.cpp opening the shards.
+    llama.cpp could not find a split model's siblings. Give each split head a
+    NamedLinks folder of shard-named links to the pinned descriptors and point the
+    head's argument there (updates bound in place). None if there is no split.
     """
     heads = [t for t in dict.fromkeys(targets) if len(split_shards(t)) > 1]
     if not FD_BINDING or not heads:
-        return None, {}
-    root = tempfile.mkdtemp(prefix="ztz-split-")  # 0700
-    links = {}
-    for n, head in enumerate(heads):
-        group = os.path.join(root, str(n))
-        os.mkdir(group, 0o700)
-        for shard in split_shards(head):
-            link = os.path.join(group, os.path.basename(shard))
-            os.symlink(bound[shard], link)
-            links[link] = bound[shard]
-        bound[head] = os.path.join(group, os.path.basename(head))
-    return root, links
-
-def _split_links_intact(links: Dict[str, str]) -> bool:
-    """True if every shard symlink still points at its own pinned descriptor."""
-    try:
-        return all(os.readlink(link) == target for link, target in links.items())
-    except OSError:
-        return False
+        return None
+    links = NamedLinks((split_shards(h) for h in heads), bound)
+    for head in heads:
+        bound[head] = links.paths[head]
+    return links
 
 def run_llama_protected(
     llama_bin: str,
@@ -193,7 +176,7 @@ def run_llama_protected(
                    "Another process may have it open for writing.",
         )
         return 1
-    split_dir = None
+    split_links = None
     try:
         bound = load_paths(pins)
         with PreFlightValidator(trust_store, use_cache=use_cache) as validator:
@@ -229,19 +212,19 @@ def run_llama_protected(
             duration_sec=elapsed,
         )
 
-        split_dir, split_links = _link_split_shards(targets, bound)
+        split_links = _link_split_shards(targets, bound)
 
         changed = changed_files(pins)
-        if changed or not _split_links_intact(split_links):
+        if changed or (split_links and not split_links.intact()):
             print_lockdown_banner(
-                failed_target=changed[0] if changed else split_dir,
+                failed_target=changed[0] if changed else split_links.root,
                 reason="MODIFIED_AFTER_PIN: file changed or was replaced during verification",
             )
             return 1
 
         print_phase(2, f"Passing Execution to Runtime Binary: {os.path.basename(safe_bin)}")
         # Linux: the runtime opens the verified descriptors (/proc/self/fd/N), not the paths;
-        # split heads point into split_dir, whose shard-named symlinks lead to the descriptors.
+        # split heads point into split_links, whose shard-named links lead to the descriptors.
         cmd = [safe_bin] + bind_target_files(safe_args, bound)
 
         proc = subprocess.Popen(cmd, shell=False, close_fds=True, pass_fds=pass_fds(pins))
@@ -251,6 +234,6 @@ def run_llama_protected(
         print(f"\n[ZTZ ERROR] Target inference binary not found: {llama_bin}", file=sys.stderr)
         return 127
     finally:
-        if split_dir:
-            shutil.rmtree(split_dir, ignore_errors=True)
+        if split_links:
+            split_links.close()
         unpin_files(pins)
