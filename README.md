@@ -28,7 +28,7 @@ ZTZ intercepts local LLM execution (`llama.cpp` via `ztz run`, Ollama / LM Studi
    - **macOS**: advisory shared `flock`, plus the same pre-launch check that the file was not modified or swapped during verification. The runtime still opens the path.
 3. **100% Offline Math**: Signature validation only requires asymmetric cryptography (`Ed25519` / `RSA-PSS`) and pre-loaded public keys. Zero telemetry, zero external network queries.
 4. **Multi-Gigabyte Streaming Verification**: Computes SHA-256 digests in chunks, enabling instant verification of 50GB+ GGUF weights without exhausting system memory.
-5. **Machine-Bound O(1) Cache (Pro)**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
+5. **Machine-Bound O(1) Cache**: First loads stream entirely; subsequent loads hit an SQLite cache whose rows are HMAC-bound to your hardware fingerprint, the exact `.sig` bytes, and the signing authority's public key, reducing 30-second verification times to <50ms. Replacing a signature or removing a key from the trust store invalidates the cached result immediately.
 
 ---
 
@@ -101,7 +101,7 @@ ztz models inspect llama3.2
 ztz verify models/qwen2.5-7b-instruct-q4_k_m.gguf
 ```
 
-### 5. Start the Zero-Trust Reverse Proxy (Pro Tier)
+### 5. Start the Zero-Trust Reverse Proxy
 To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:
 ```bash
 ztz proxy --port 11434 --upstream-port 11435
@@ -190,24 +190,7 @@ except UntrustedPayloadError as e:
 
 ---
 
-## Dual-Tier & Licensing Model
-
-| Feature | Community (FOSS) | Pro / Power User ($19-$29) | Enterprise ($15-$30/mo/seat) |
-| :--- | :--- | :--- | :--- |
-| **Inference Gate** | `llama.cpp` CLI wrapper | **Ollama / LM Studio API Proxy** | gRPC / Remote Sockets |
-| **Verification** | Full SHA-256 stream | **Instant Merkle / Inode Cache** | Cosign / Sigstore Integration |
-| **Key Management** | Local folder drops | HF Auto-Sign & Fetch | Centralized IAM / KMS |
-| **Monitoring** | Manual Execution | Background Model Daemon | Central SIEM Audit Logging |
-| **Developer SDK** | None | Python `@ztz.guard` | CI/CD Build Pipelines |
-
-To view your local machine's anonymous hardware fingerprint (for Pro licensing):
-```bash
-ztz fingerprint
-```
-
----
-
 ## License
-ZeroTrustZone (ZTZ Core) is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for more details. 
+ZeroTrustZone is fully open source under the Apache License, Version 2.0; every feature in this README is included. See [LICENSE](LICENSE) for details.
 
 For information on open-source libraries used in this project, please refer to the [Third-Party Notices](THIRDPARTY.md).
