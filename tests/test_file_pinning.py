@@ -227,7 +227,8 @@ class TestLinuxDescriptorBinding(_PosixFixture):
             os.replace(self.evil, self.model)
             with open(pins[0].load_path, "rb") as f:
                 self.assertEqual(f.read(), MODEL_BYTES)
-            self.assertEqual(changed_files(pins), [])
+            # Unlinking bumps the pinned inode's ctime; a swap before launch fails closed.
+            self.assertEqual(changed_files(pins), [self.model])
         finally:
             unpin_files(pins)
 

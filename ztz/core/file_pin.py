@@ -80,8 +80,10 @@ class Pin:
             return False
         if _snapshot(os.fstat(self.fd)) != self.snapshot:
             return True
+        # Unlinking or replacing the path also bumps the pinned inode's ctime, so a
+        # swap before launch is reported too (fail closed); after launch it is harmless.
         if FD_BINDING:
-            return False  # the runtime loads through the fd; the path no longer matters
+            return False  # the runtime loads through the fd; the path itself is not re-checked
         try:
             return _snapshot(os.stat(self.path)) != self.snapshot
         except OSError:
