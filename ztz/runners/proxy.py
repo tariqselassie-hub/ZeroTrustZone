@@ -1,5 +1,5 @@
 """
-Ollama / LM Studio API Reverse Proxy for ZTZ Pro.
+Ollama / LM Studio API Reverse Proxy for ZTZ.
 Intercepts local inference traffic to cryptographically verify models before allowing execution.
 """
 
@@ -268,7 +268,7 @@ def run_proxy(host: str = "127.0.0.1", port: int = 11434, upstream_port: int = 1
     
     app.router.add_route("*", "/{tail:.*}", proxy.passthrough)
     
-    print(f"\n🛡️  ZTZ Pro Interceptor Proxy starting...")
+    print(f"\n🛡️  ZTZ Interceptor Proxy starting...")
     print(f"   Listening on: http://{host}:{port}")
     print(f"   Forwarding to: http://{host}:{upstream_port}\n")
     

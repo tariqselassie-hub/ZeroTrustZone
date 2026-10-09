@@ -101,7 +101,6 @@ def run_llama_protected(
     llama_bin: str,
     safe_args: List[str],
     trust_store: TrustStore,
-    operating_mode: str = "COMMUNITY",
     use_cache: bool = True,
 ) -> int:
     """
@@ -162,7 +161,6 @@ def run_llama_protected(
                 passed=passed_count,
                 failed=failed_count,
                 duration_sec=elapsed,
-                mode=operating_mode,
             )
             # Abort before memory allocation
             return 1
@@ -173,7 +171,6 @@ def run_llama_protected(
             passed=passed_count,
             failed=failed_count,
             duration_sec=elapsed,
-            mode=operating_mode,
         )
 
         changed = changed_files(pins)

@@ -1,5 +1,5 @@
 """
-Instant Model Attestation Cache for ZTZ Pro.
+Instant Model Attestation Cache for ZTZ.
 Eliminates full SHA-256 streaming on warm model loads by caching inode/mtime/size
 and cryptographically binding the cache row to the local machine fingerprint via HMAC.
 """
@@ -11,7 +11,7 @@ import hmac
 import hashlib
 import pathlib
 from typing import Callable, Optional
-from ztz.lic.fingerprint import HardwareFingerprint
+from ztz.core.fingerprint import HardwareFingerprint
 
 CACHE_DB_PATH = os.path.expanduser("~/.ztz/cache.db")
 
