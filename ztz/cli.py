@@ -5,7 +5,7 @@ Commands:
   - doctor: Comprehensive system health, crypto, and runtime diagnostics
   - models: Discover, inspect, and attest local Ollama and GGUF models
   - run: Execute local model runtime (llama.cpp) with pre-flight cryptographic gate
-  - proxy: Start the Ollama/LM Studio reverse proxy interceptor
+  - proxy: Start the Ollama reverse proxy interceptor
   - sign: Cryptographically sign a model weight or context file (detached .sig)
   - verify: Verify integrity of a model weight or context file offline
   - inspect-model: Inspect GGUF / Safetensors / PyTorch weights for bytecode risks
@@ -101,8 +101,11 @@ def cmd_models(args: argparse.Namespace) -> int:
                 print(json.dumps(res, indent=2))
             else:
                 print(f"[SUCCESS] Model '{res['name']}' signed successfully.")
-                print(f"  Physical File : {res['blob_path']}")
-                print(f"  Signature     : {res['sig_path']}")
+                # Weights first, then any projector / adapter layers Ollama also loads.
+                for i, (blob, sig) in enumerate(zip(res["blob_paths"], res["sig_paths"])):
+                    label = "Physical File" if i == 0 else "Extra Layer  "
+                    print(f"  {label} : {blob}")
+                    print(f"  Signature     : {sig}")
                 print(f"  Signer Key    : {res['signer_key']}")
             return 0
         except Exception as e:
@@ -364,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_options(run_p)
 
     # Proxy subparser
-    proxy_p = subparsers.add_parser("proxy", help="Start the Ollama/LM Studio reverse proxy interceptor")
+    proxy_p = subparsers.add_parser("proxy", help="Start the Ollama reverse proxy interceptor")
     proxy_p.add_argument("--host", default="127.0.0.1", help="Host to bind proxy")
     proxy_p.add_argument("--port", type=int, default=11434, help="Port to listen on (default 11434)")
     proxy_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend")

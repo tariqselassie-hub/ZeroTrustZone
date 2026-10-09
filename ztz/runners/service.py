@@ -6,7 +6,7 @@ Installs `ztz proxy` as a per-user service, no admin rights required:
 - macOS:   launchd LaunchAgent ~/Library/LaunchAgents/com.zerotrustzone.proxy.plist
 - Windows: Task Scheduler logon task "ZeroTrustZone Proxy" (hidden, pythonw.exe)
 
-The proxy logs to ~/.ztz/logs/proxy.log. Ollama / LM Studio configuration is never
+The proxy logs to ~/.ztz/logs/proxy.log. Ollama configuration is never
 touched: moving the backend to the upstream port is left to the user.
 """
 
@@ -80,7 +80,7 @@ def render(platform: str, cfg: ServiceConfig, python: str) -> bytes:
     if platform == "linux":
         return (
             "[Unit]\n"
-            "Description=ZeroTrustZone pre-flight proxy (Ollama / LM Studio)\n"
+            "Description=ZeroTrustZone pre-flight proxy (Ollama)\n"
             "After=network.target\n\n"
             "[Service]\n"
             f"ExecStart={' '.join(_systemd_quote(a) for a in argv)}\n"

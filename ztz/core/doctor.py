@@ -16,6 +16,9 @@ from ztz.core.model_manager import get_ollama_base_dir, discover_ollama_models
 from ztz.core.fingerprint import HardwareFingerprint
 from ztz.core.context_shield import SECRET_PATTERNS
 from ztz.core.cache import AttestationCache, CACHE_DB_PATH
+from ztz.core.netcheck import classify_port
+
+PROXY_PORT = 11434
 
 def check_socket_port(host: str, port: int, timeout: float = 0.5) -> bool:
     """Checks if a TCP port is actively listening locally."""
@@ -87,7 +90,8 @@ def run_diagnostics() -> Dict[str, Any]:
     # 4. Ollama Runtime & Models
     ollama_dir = get_ollama_base_dir()
     ollama_dir_exists = os.path.isdir(ollama_dir)
-    ollama_port_active = check_socket_port("127.0.0.1", 11434)
+    # Default port, or the upstream port the ZTZ proxy forwards to.
+    ollama_port_active = check_socket_port("127.0.0.1", 11434) or check_socket_port("127.0.0.1", 11435)
     
     discovered_models = []
     if ollama_dir_exists:
@@ -102,6 +106,17 @@ def run_diagnostics() -> Dict[str, Any]:
         "service_online": ollama_port_active,
         "models_count": len(discovered_models),
         "signed_models_count": sum(1 for m in discovered_models if m.get("has_sig")),
+    }
+
+    # 4b. ZTZ proxy coverage: who answers on the Ollama port at each loopback address.
+    # 'direct' next to a running proxy means clients can reach the backend unchecked.
+    endpoints = classify_port(PROXY_PORT)
+    proxy_active = "ztz" in endpoints.values()
+    checks["proxy"] = {
+        "port": PROXY_PORT,
+        "endpoints": endpoints,
+        "active": proxy_active,
+        "bypass": [h for h, kind in endpoints.items() if kind == "direct"] if proxy_active else [],
     }
 
     # 5. Pre-Flight Attestation Cache
@@ -133,6 +148,9 @@ def run_diagnostics() -> Dict[str, Any]:
 
     # Overall verdict
     is_ready = checks["crypto"]["ok"] and checks["trust_store"]["ok"]
-    checks["verdict"] = "READY" if is_ready else "SETUP_RECOMMENDED"
+    if checks["proxy"]["bypass"]:
+        checks["verdict"] = "BYPASS_RISK"
+    else:
+        checks["verdict"] = "READY" if is_ready else "SETUP_RECOMMENDED"
 
     return checks

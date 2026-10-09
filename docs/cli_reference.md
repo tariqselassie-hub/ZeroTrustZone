@@ -20,7 +20,8 @@ ztz init
 Runs comprehensive system health, runtime connectivity, and cryptographic security diagnostics.
 - Checks Python environment & OpenSSL/Cryptography acceleration.
 - Validates trust stores and loaded authority keys (`~/.ztz/keys`, `~/.zerotrustzone/keys`, `~/.ztz/trusted_keys`; plus `./keys` when `ZTZ_TRUST_LOCAL=1`).
-- Probes local Ollama / LM Studio daemons and storage directories.
+- Probes the local Ollama service and the models directory it uses.
+- Reports who answers on port 11434 at `127.0.0.1` and `::1` (`ZTZ`, `DIRECT` or closed). If the ZTZ proxy is running but another server also answers on that port, the verdict is `BYPASS_RISK`.
 - Reports Attestation Cache metrics and Context Shield secret inspection rules.
 - `--json`: Output full health diagnostics report in JSON format.
 
@@ -34,7 +35,7 @@ ztz doctor
 Discovers, inspects, and attests local Ollama and GGUF models.
 
 #### `ztz models list`
-Scans local Ollama manifests (`~/.ollama/models` or `$OLLAMA_MODELS`) and reports models, physical blob paths, sizes, container formats, and attestation status.
+Scans local Ollama manifests and reports models, physical blob paths, sizes, container formats, and attestation status. The models directory is `$OLLAMA_MODELS`, else the Ollama desktop app's *models location* setting (Windows), else `~/.ollama/models`. A model counts as signed only when every layer Ollama loads (weights, vision projector, adapters) has a valid `.sig`.
 - `--dir`: Optional custom Ollama models directory.
 - `--json`: Output inventory in JSON format.
 
@@ -43,7 +44,7 @@ ztz models list
 ```
 
 #### `ztz models sign <model_name>`
-Resolves a model tag (e.g. `llama3.2`, `mistral:latest`) to its physical blob on disk and generates a detached cryptographic signature (`.sig`) using the authority key in one step.
+Resolves a model tag (e.g. `llama3.2`, `mistral:latest`) to the blobs Ollama loads for it and writes a detached signature (`.sig`) next to each, using the authority key. A bare name means `:latest`, exactly as in Ollama; another tag is never substituted. Every loaded layer is signed: the weights plus any vision projector or adapter.
 - `--key`: Path to private signing key (defaults to your initialized Root Authority key).
 - `--dir`: Optional custom Ollama models directory.
 - `--json`: Output signature result in JSON format.
@@ -102,14 +103,18 @@ ztz run --llama-bin ./llama-cli -m model.gguf -f prompt.txt
 ---
 
 ### `ztz proxy`
-Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama or LM Studio.
+Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama (Ollama API only; LM Studio is not supported as a backend).
 - `--host`: Host to bind (default: `127.0.0.1`).
 - `--port`: Interceptor port (default: `11434`).
 - `--upstream-port`: Real backend daemon port (default: `11435`).
 - `--trust-store`: Public key directory (cascades to `~/.ztz/keys`).
 - `--no-cache`: Bypass the attestation cache.
 - `--log-file`: Append all output to this file instead of the console.
-- Pre-flight attests weights and redacts confidential credentials from prompts on `/api/generate`, `/api/chat`, and OpenAI `/v1/chat/completions`.
+- Attests every request that would load a model: `/api/generate`, `/api/chat`, `/api/embed`, `/v1/*`, and any other POST naming a `model`. Management calls (`/api/show`, `/api/pull`, `/api/push`, `/api/delete`, `/api/copy`, `/api/create`) pass untouched.
+- Resolves a model's files by asking the backend (`/api/show`): weights, vision projector and LoRA adapters are all attested. Unknown models, an unreachable backend, and models with no local files (cloud models) are refused.
+- Redacts confidential credentials from `prompt` and `messages` before forwarding.
+- Refuses to start if another process already listens on `--port` at `127.0.0.1` or `::1` (clients there would bypass ZTZ).
+- Every response carries `X-ZTZ-Proxy: 1`, which `ztz doctor` uses to tell the proxy from the backend.
 
 ```bash
 ztz proxy --port 11434 --upstream-port 11435

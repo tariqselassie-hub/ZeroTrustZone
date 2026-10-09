@@ -26,7 +26,7 @@ ztz doctor
 ztz models list
 ztz models sign llama3.2
 
-# 4. Run llama.cpp or protect Ollama/LM Studio via reverse proxy
+# 4. Run llama.cpp or protect Ollama via reverse proxy
 ztz run --llama-bin ./llama-cli -m models/model.gguf
 ztz proxy --port 11434 --upstream-port 11435
 ```

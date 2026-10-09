@@ -110,7 +110,7 @@ def print_init_card(info: Dict[str, Any]):
     print(f"║   1. Run 'ztz doctor' to verify local runtime health                         ║")
     print(f"║   2. Run 'ztz models list' to view local Ollama models                       ║")
     print(f"║   3. Run 'ztz models sign <name>' to sign a model in 1 click                 ║")
-    print(f"║   4. Run 'ztz proxy' to guard Ollama / LM Studio inference                   ║")
+    print(f"║   4. Run 'ztz proxy' to guard Ollama inference                               ║")
     print(f"╚{'═' * width}╝\n")
 
 def print_doctor_report(checks: Dict[str, Any]):
@@ -141,11 +141,24 @@ def print_doctor_report(checks: Dict[str, Any]):
     
     # Ollama
     o = checks.get("ollama", {})
-    o_status = "ONLINE (Port 11434)" if o.get("service_online") else "OFFLINE"
+    o_status = "ONLINE" if o.get("service_online") else "OFFLINE"
     o_dir = "Found" if o.get("directory_exists") else "Missing"
     o_str = f"{'✔' if o.get('service_online') else '○'} Service: {o_status} | Storage: {o_dir} ({o.get('models_count', 0)} models, {o.get('signed_models_count', 0)} signed)"
     print(f"║ Ollama Gateway : {o_str[:width-20]:<{width-19}}║")
-    
+    print(f"║ Models Dir     : {str(o.get('directory', ''))[:width-20]:<{width-19}}║")
+
+    # ZTZ proxy coverage
+    px = checks.get("proxy", {})
+    labels = {"ztz": "ZTZ", "direct": "DIRECT", "closed": "-"}
+    ends = " | ".join(f"{h} {labels.get(k, k)}" for h, k in px.get("endpoints", {}).items())
+    if px.get("bypass"):
+        px_str = f"⚠ :{px.get('port')} {ends} (BYPASS)"
+    elif px.get("active"):
+        px_str = f"✔ :{px.get('port')} {ends}"
+    else:
+        px_str = f"○ Not running (:{px.get('port')} {ends})"
+    print(f"║ ZTZ Proxy      : {px_str[:width-20]:<{width-19}}║")
+
     # Cache
     ca = checks.get("cache", {})
     ca_str = f"{'✔' if ca.get('exists') else '○'} {ca.get('records', 0)} attestation records ({ca.get('size_kb', 0)} KB)"
@@ -159,7 +172,12 @@ def print_doctor_report(checks: Dict[str, Any]):
     # Verdict
     print(f"╠{'═' * width}╣")
     v = checks.get("verdict", "UNKNOWN")
-    v_badge = "✔ ALL SYSTEMS SECURE & OPERATIONAL" if v == "READY" else "⚠ ACTION RECOMMENDED: Run 'ztz init'"
+    if v == "READY":
+        v_badge = "✔ ALL SYSTEMS SECURE & OPERATIONAL"
+    elif v == "BYPASS_RISK":
+        v_badge = "⚠ BYPASS: backend reachable directly on the proxy port"
+    else:
+        v_badge = "⚠ ACTION RECOMMENDED: Run 'ztz init'"
     print(f"║ Verdict        : {v_badge:<{width-20}} ║")
     print(f"╚{'═' * width}╝\n")
 

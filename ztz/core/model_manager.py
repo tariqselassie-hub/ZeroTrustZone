@@ -1,12 +1,12 @@
 """
 Model Manager for ZeroTrustZone / ZTZ (ztz/core/model_manager.py).
-Discovers local Ollama / LM Studio / GGUF models, parses OCI manifests,
+Discovers local Ollama / GGUF models, parses OCI manifests,
 checks attestation status, and performs one-command signing.
 """
 
 import os
 import json
-import glob
+import sqlite3
 from typing import List, Dict, Any, Optional
 
 from ztz.core.crypto import ZTZSigner
@@ -14,16 +14,56 @@ from ztz.core.trust_store import TrustStore, find_private_key
 from ztz.core.validator import PreFlightValidator
 from ztz.core.model_inspector import ModelFormatInspector
 
+# Manifest layers Ollama loads into memory alongside (or as) the weights.
+LOADABLE_LAYER_TYPES = (
+    "application/vnd.ollama.image.model",
+    "application/vnd.ollama.image.projector",
+    "application/vnd.ollama.image.adapter",
+)
+
+def ollama_app_settings_db() -> Optional[str]:
+    """The Ollama desktop app's settings database (Windows), if present."""
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        path = os.path.join(os.environ["LOCALAPPDATA"], "Ollama", "db.sqlite")
+        if os.path.isfile(path):
+            return path
+    return None
+
+def _ollama_app_models_dir() -> Optional[str]:
+    """
+    Models directory chosen in the Ollama desktop app's settings. The app passes it
+    to `ollama serve` as OLLAMA_MODELS without exporting it, so other processes
+    (ZTZ included) would otherwise fall back to ~/.ollama/models.
+    """
+    db = ollama_app_settings_db()
+    if not db:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1)
+        try:
+            row = conn.execute("SELECT models FROM settings LIMIT 1").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    path = row[0] if row else None
+    return path if path and os.path.isdir(path) else None
+
 def get_ollama_base_dir() -> str:
     """
     Resolves the base directory for Ollama models, respecting:
     1. OLLAMA_MODELS environment variable
-    2. ~/.ollama/models
-    3. %LOCALAPPDATA%/Ollama/models (Windows fallback)
+    2. The Ollama desktop app's models setting (Windows)
+    3. ~/.ollama/models
+    4. %LOCALAPPDATA%/Ollama/models (Windows fallback)
     """
     env_dir = os.environ.get("OLLAMA_MODELS")
     if env_dir and os.path.exists(env_dir):
         return env_dir
+
+    app_dir = _ollama_app_models_dir()
+    if app_dir:
+        return app_dir
 
     default_home = os.path.expanduser("~/.ollama/models")
     if os.path.exists(default_home):
@@ -38,34 +78,84 @@ def get_ollama_base_dir() -> str:
 
     return default_home
 
+def _blob_path(model_base_dir: str, digest: Any) -> Optional[str]:
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        return None
+    hash_val = digest.split(":", 1)[1]
+    if not hash_val or not all(c in "0123456789abcdef" for c in hash_val):
+        return None  # never let a manifest steer the path outside blobs/
+    return os.path.join(model_base_dir, "blobs", f"sha256-{hash_val}")
+
 def parse_ollama_manifest_file(manifest_path: str, model_base_dir: str) -> Optional[Dict[str, Any]]:
-    """Reads an Ollama manifest JSON and extracts the model layer blob path and digest."""
+    """
+    Reads an Ollama manifest JSON. blob_path is the weights layer; blob_paths lists
+    every layer Ollama loads (weights first, then projector / adapters), all of
+    which must be signed.
+    """
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception:
         return None
 
-    layers = manifest.get("layers", [])
+    loadable = []
     model_digest = None
     model_size = 0
-    for layer in layers:
-        if layer.get("mediaType") == "application/vnd.ollama.image.model":
-            model_digest = layer.get("digest")
+    for layer in manifest.get("layers", []):
+        media_type = layer.get("mediaType")
+        if media_type not in LOADABLE_LAYER_TYPES:
+            continue
+        path = _blob_path(model_base_dir, layer.get("digest"))
+        if path is None:
+            return None
+        if media_type == LOADABLE_LAYER_TYPES[0] and model_digest is None:
+            model_digest = layer["digest"]
             model_size = layer.get("size", 0)
-            break
+            loadable.insert(0, path)
+        else:
+            loadable.append(path)
 
-    if not model_digest or not model_digest.startswith("sha256:"):
+    if model_digest is None:
         return None
 
-    hash_val = model_digest.split(":")[1]
-    blob_path = os.path.join(model_base_dir, "blobs", f"sha256-{hash_val}")
+    blob_path = loadable[0]
     return {
         "digest": model_digest,
         "blob_path": blob_path,
-        "blob_exists": os.path.exists(blob_path),
+        "blob_paths": loadable,
+        "blob_exists": all(os.path.exists(p) for p in loadable),
         "size_bytes": os.path.getsize(blob_path) if os.path.exists(blob_path) else model_size,
     }
+
+_TRIPLE_QUOTE = '"' * 3
+
+def parse_modelfile_paths(modelfile: str) -> List[str]:
+    """
+    Files an Ollama modelfile (from /api/show) loads: every FROM / ADAPTER line
+    that names a local path (weights, projector, LoRA adapters). Commented lines
+    and triple-quoted blocks (TEMPLATE, SYSTEM, LICENSE, MESSAGE) are skipped.
+    A FROM naming another model (e.g. 'FROM llama3') is not a path and is ignored.
+    """
+    paths = []
+    in_block = False
+    for raw in modelfile.splitlines():
+        line = raw.strip()
+        opens_or_closes = line.count(_TRIPLE_QUOTE) % 2 == 1
+        if in_block:
+            in_block = not opens_or_closes
+            continue
+        if opens_or_closes:
+            in_block = True
+            continue
+        if not line or line.startswith("#"):
+            continue
+        keyword, _, value = line.partition(" ")
+        if keyword.upper() not in ("FROM", "ADAPTER"):
+            continue
+        value = value.strip().strip('"')
+        if os.path.isabs(value) or value.startswith(("/", "\\")) or (len(value) > 2 and value[1] == ":"):
+            paths.append(value)
+    return paths
 
 def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -106,14 +196,18 @@ def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[st
 
             blob_path = info["blob_path"]
             sig_path = f"{blob_path}.sig"
-            has_sig = os.path.exists(sig_path)
-            
+            # Every loaded layer (weights, projector, adapters) must carry a valid .sig.
+            has_sig = all(os.path.exists(f"{p}.sig") for p in info["blob_paths"])
+
             status = "UNSIGNED"
             attestation_details = {}
             if info["blob_exists"] and has_sig:
-                attest = validator.validate_file(blob_path, sig_path=sig_path)
-                status = attest.get("status", "FAILED")
-                attestation_details = attest
+                for p in info["blob_paths"]:
+                    attest = validator.validate_file(p)
+                    status = attest.get("status", "FAILED")
+                    attestation_details = attest
+                    if status not in ("VERIFIED", "VERIFIED_CACHE"):
+                        break
 
             # Model safety check
             format_name = "UNKNOWN"
@@ -130,6 +224,7 @@ def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[st
                 "name": tag,
                 "manifest_path": full_manifest_path,
                 "blob_path": blob_path,
+                "blob_paths": info["blob_paths"],
                 "exists": info["blob_exists"],
                 "size_bytes": info["size_bytes"],
                 "digest": info["digest"],
@@ -153,24 +248,21 @@ def resolve_model_target(model_name: str, model_base_dir: Optional[str] = None) 
         return {
             "name": os.path.basename(model_name),
             "blob_path": os.path.abspath(model_name),
+            "blob_paths": [os.path.abspath(model_name)],
             "exists": True,
             "size_bytes": os.path.getsize(model_name),
             "sig_path": f"{os.path.abspath(model_name)}.sig",
             "has_sig": os.path.exists(f"{os.path.abspath(model_name)}.sig"),
         }
 
-    # 2. Ollama manifest search
+    # 2. Ollama manifest search. Same rule as Ollama: a bare name means ':latest';
+    # never fall back to another tag, or ZTZ would sign a different model than
+    # the one Ollama loads.
     base_dir = model_base_dir or get_ollama_base_dir()
-    search_tag = model_name if ":" in model_name else f"{model_name}:latest"
-    all_models = discover_ollama_models(base_dir)
-    
-    for m in all_models:
-        if m["name"] == search_tag or m["name"].lower() == search_tag.lower():
+    search_tag = (model_name if ":" in model_name else f"{model_name}:latest").lower()
+    for m in discover_ollama_models(base_dir):
+        if m["name"].lower() == search_tag:
             return m
-        # Also match if user passed just the repo name e.g. "llama3" and model name is "llama3:latest"
-        if m["name"].split(":")[0].lower() == model_name.lower():
-            return m
-
     return None
 
 def sign_model_target(
@@ -187,8 +279,10 @@ def sign_model_target(
         raise FileNotFoundError(f"Model '{model_name}' could not be located on disk or in Ollama repository.")
 
     blob_path = target["blob_path"]
-    if not os.path.exists(blob_path):
-        raise FileNotFoundError(f"Physical model blob missing at: {blob_path}")
+    blob_paths = target.get("blob_paths") or [blob_path]
+    for p in blob_paths:
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"Physical model blob missing at: {p}")
 
     # Locate private key
     resolved_key = find_private_key(private_key_path)
@@ -198,12 +292,14 @@ def sign_model_target(
         )
 
     signer = ZTZSigner(resolved_key)
-    sig_path = signer.sign_file(blob_path)
+    sig_paths = [signer.sign_file(p) for p in blob_paths]
 
     return {
         "name": target.get("name", os.path.basename(blob_path)),
         "blob_path": blob_path,
-        "sig_path": sig_path,
+        "blob_paths": blob_paths,
+        "sig_path": sig_paths[0],
+        "sig_paths": sig_paths,
         "signer_key": resolved_key,
         "size_bytes": target.get("size_bytes", os.path.getsize(blob_path)),
         "status": "SIGNED",

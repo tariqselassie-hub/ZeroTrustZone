@@ -8,7 +8,7 @@
 
 > 📖 **Full documentation is available in the [`docs/` folder](docs/index.md).**
 
-ZTZ intercepts local LLM execution (`llama.cpp` via `ztz run`, Ollama / LM Studio via `ztz proxy`, and in-process runtimes such as ONNX Runtime, Safetensors or PyTorch via the Python SDK) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, ZTZ ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
+ZTZ intercepts local LLM execution (`llama.cpp` via `ztz run`, Ollama via `ztz proxy`, and in-process runtimes such as ONNX Runtime, Safetensors or PyTorch via the Python SDK) **before** model weights and prompt contexts are mapped into RAM/VRAM. By enforcing asymmetric cryptographic verification with zero network dependencies, ZTZ ensures that tampered GGUF weights, backdoored system prompts, or un-attested context files cannot contaminate hardware memory registers.
 
 ```text
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -82,19 +82,21 @@ Automatically provisions your root authority keypair (`authority_priv.pem` and `
 ```bash
 ztz doctor
 ```
-Audits your cryptography engine, loaded keys, cache health, and automatically detects running Ollama / LM Studio instances.
+Audits your cryptography engine, loaded keys, cache health, the Ollama models directory in use, and whether the ZTZ proxy actually covers the Ollama port. A `BYPASS_RISK` verdict means something other than ZTZ also answers on that port (on `127.0.0.1` or `::1`), so clients can reach Ollama unchecked.
 
 ### 3. Discover & Sign Local Ollama Models in 1 Step
 ```bash
 # View all installed models and their attestation status
 ztz models list
 
-# Automatically resolve and sign an Ollama model tag
+# Automatically resolve and sign an Ollama model tag (a bare name means ':latest', as in Ollama)
 ztz models sign llama3.2
 
 # Structural container inspection for bytecode / pickle risks
 ztz models inspect llama3.2
 ```
+
+`ztz models sign` signs every layer Ollama loads for that tag: the weights plus any vision projector or adapter layer. The models directory comes from `OLLAMA_MODELS`, else the Ollama desktop app's own *models location* setting (Windows), else `~/.ollama/models`.
 
 ### 4. Verify Any File or Model Offline
 ```bash
@@ -102,11 +104,11 @@ ztz verify models/qwen2.5-7b-instruct-q4_k_m.gguf
 ```
 
 ### 5. Start the Zero-Trust Reverse Proxy
-To protect GUI apps like Open WebUI, LM Studio, or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:
+To protect Ollama clients such as Open WebUI or Cursor without changing their config, launch the ZTZ Interceptor on the default Ollama port:
 ```bash
 ztz proxy --port 11434 --upstream-port 11435
 ```
-ZTZ transparently intercepts incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime. Prompts and chat messages are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
+ZTZ intercepts every request that would load a model (`/api/generate`, `/api/chat`, `/api/embed`, the OpenAI-compatible `/v1/*` routes, and any other POST naming a `model`; only management calls such as `/api/pull` or `/api/show` pass untouched). For each, it asks Ollama's `/api/show` which files that model loads (weights, vision projector, LoRA adapters) and attests every one before forwarding. It fails closed: an unknown model, an unreachable backend, or a model with no local files (cloud models) is refused. Prompts and chat messages are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
 
 To keep the proxy running in the background, install it as a per-user service (systemd user unit on Linux, launchd agent on macOS, hidden logon task on Windows; no admin rights needed). Then move Ollama to the upstream port, e.g. `OLLAMA_HOST=127.0.0.1:11435`:
 ```bash
@@ -115,6 +117,10 @@ ztz service status
 ztz service uninstall
 ```
 Service output goes to `~/.ztz/logs/proxy.log`.
+
+The proxy refuses to start if anything else already listens on its port at `127.0.0.1` or `::1`: clients reaching that address would skip ZTZ entirely. The usual cause is Ollama's **Expose Ollama to the network** setting, which forces Ollama onto port 11434 on all addresses and overrides `OLLAMA_HOST`; turn it off. Clients that talk to Ollama's own port directly (including the Ollama desktop app's chat window) are not covered.
+
+The proxy speaks the Ollama API only; LM Studio is not supported as a backend.
 
 ### 6. Run `llama.cpp` under Pre-Flight Protection
 ```bash
