@@ -15,7 +15,7 @@ from ztz.core.trust_store import TrustStore, default_search_paths, find_private_
 from ztz.core.model_manager import get_ollama_base_dir, discover_ollama_models
 from ztz.lic.fingerprint import HardwareFingerprint
 from ztz.core.context_shield import SECRET_PATTERNS
-from ztz.core.cache import AttestationCache
+from ztz.core.cache import AttestationCache, CACHE_DB_PATH
 
 def check_socket_port(host: str, port: int, timeout: float = 0.5) -> bool:
     """Checks if a TCP port is actively listening locally."""
@@ -105,16 +105,14 @@ def run_diagnostics() -> Dict[str, Any]:
     }
 
     # 5. Pre-Flight Attestation Cache
-    cache_path = os.path.expanduser("~/.ztz/attestation_cache.db")
+    cache_path = CACHE_DB_PATH
     cache_exists = os.path.exists(cache_path)
     cache_entries = 0
     cache_size_kb = 0
     if cache_exists:
         try:
-            cache = AttestationCache(cache_path)
-            cur = cache.conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM attestation_records")
-            row = cur.fetchone()
+            with AttestationCache(cache_path) as cache:
+                row = cache.safe_conn.execute("SELECT COUNT(*) FROM attestation_cache").fetchone()
             cache_entries = row[0] if row else 0
             cache_size_kb = round(os.path.getsize(cache_path) / 1024, 2)
         except Exception:
