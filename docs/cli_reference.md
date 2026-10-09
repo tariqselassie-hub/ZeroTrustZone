@@ -107,10 +107,35 @@ Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama or LM Studio.
 - `--port`: Interceptor port (default: `11434`).
 - `--upstream-port`: Real backend daemon port (default: `11435`).
 - `--trust-store`: Public key directory (cascades to `~/.ztz/keys`).
+- `--no-cache`: Bypass the attestation cache.
+- `--log-file`: Append all output to this file instead of the console.
 - Pre-flight attests weights and redacts confidential credentials from prompts on `/api/generate`, `/api/chat`, and OpenAI `/v1/chat/completions`.
 
 ```bash
 ztz proxy --port 11434 --upstream-port 11435
+```
+
+---
+
+### `ztz service install | uninstall | status`
+Runs `ztz proxy` as a per-user background service that starts at login and restarts on failure. No admin rights are needed:
+
+| Platform | Mechanism | Definition file |
+| :--- | :--- | :--- |
+| Linux | systemd user unit | `~/.config/systemd/user/ztz-proxy.service` |
+| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/com.zerotrustzone.proxy.plist` |
+| Windows | Task Scheduler logon task "ZeroTrustZone Proxy" (hidden, `pythonw.exe`) | `~/.ztz/service/ztz-proxy.xml` |
+
+- `install` accepts the proxy options `--host`, `--port`, `--upstream-port`, `--trust-store`, `--no-cache`, plus:
+  - `--no-start`: register the service without starting it now.
+  - `--dry-run`: print the definition file and the commands; change nothing.
+- Output goes to `~/.ztz/logs/proxy.log`.
+- Your backend's configuration is not changed: move Ollama to the upstream port yourself (`OLLAMA_HOST=127.0.0.1:11435`) and restart it.
+- `status` exits `3` when the service is not installed.
+
+```bash
+ztz service install --dry-run
+ztz service install
 ```
 
 ---

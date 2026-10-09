@@ -108,6 +108,14 @@ ztz proxy --port 11434 --upstream-port 11435
 ```
 ZTZ transparently intercepts incoming OpenAI/Ollama OCI generation requests, physically locates the GGUF blobs on disk, and enforces cryptographic attestation before yielding the TCP stream to the runtime. Prompts and chat messages are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
 
+To keep the proxy running in the background, install it as a per-user service (systemd user unit on Linux, launchd agent on macOS, hidden logon task on Windows; no admin rights needed). Then move Ollama to the upstream port, e.g. `OLLAMA_HOST=127.0.0.1:11435`:
+```bash
+ztz service install            # add --dry-run to preview, --no-start to install without starting
+ztz service status
+ztz service uninstall
+```
+Service output goes to `~/.ztz/logs/proxy.log`.
+
 ### 6. Run `llama.cpp` under Pre-Flight Protection
 ```bash
 ztz run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f prompt.txt --ctx-size 4096

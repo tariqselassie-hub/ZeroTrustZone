@@ -147,7 +147,15 @@ def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
         use_cache=not args.no_cache,
     )
 
+def _redirect_output(log_file: str):
+    """Send stdout/stderr to log_file (append, line-buffered); used when running as a service."""
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+    log = open(log_file, "a", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stderr = log
+
 def cmd_proxy(args: argparse.Namespace) -> int:
+    if args.log_file:
+        _redirect_output(args.log_file)
     try:
         run_proxy(
             host=args.host,
@@ -233,12 +241,23 @@ def cmd_cache(args: argparse.Namespace) -> int:
     return 1
 
 def cmd_service(args: argparse.Namespace) -> int:
-    print(
-        f"[ERROR] 'ztz service {args.action}' is not implemented yet. "
-        "Run 'ztz proxy' under your platform's service manager instead.",
-        file=sys.stderr,
-    )
-    return 2
+    from ztz.runners import service
+    try:
+        if args.action == "install":
+            cfg = service.ServiceConfig(
+                host=args.host,
+                port=args.port,
+                upstream_port=args.upstream_port,
+                trust_store=args.trust_store,
+                no_cache=args.no_cache,
+            )
+            return service.install(cfg, start=not args.no_start, dry_run=args.dry_run)
+        if args.action == "uninstall":
+            return service.uninstall()
+        return service.status()
+    except (OSError, ValueError) as e:
+        print(f"[ERROR] ztz service {args.action} failed: {e}", file=sys.stderr)
+        return 1
 
 def cmd_inspect_model(args: argparse.Namespace) -> int:
     from ztz.core.model_inspector import ModelFormatInspector
@@ -351,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     proxy_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend")
     proxy_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
     proxy_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    proxy_p.add_argument("--log-file", default=None, help="Append all output to this file instead of the console")
 
     # Sign subparser
     sign_p = subparsers.add_parser("sign", help="Sign a model weight or context payload")
@@ -381,8 +401,15 @@ def build_parser() -> argparse.ArgumentParser:
     cache_p.add_argument("action", choices=["clear"], help="Action to perform (e.g. clear)")
 
     # Service subparser
-    svc_p = subparsers.add_parser("service", help="Manage the ZTZ background daemon (not yet implemented)")
-    svc_p.add_argument("action", choices=["install"], help="Action to perform")
+    svc_p = subparsers.add_parser("service", help="Run the ZTZ proxy as a per-user background service")
+    svc_p.add_argument("action", choices=["install", "uninstall", "status"], help="Action to perform")
+    svc_p.add_argument("--host", default="127.0.0.1", help="Host for the proxy to bind")
+    svc_p.add_argument("--port", type=int, default=11434, help="Port the proxy listens on (default 11434)")
+    svc_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend (default 11435)")
+    svc_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
+    svc_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    svc_p.add_argument("--no-start", action="store_true", help="Install without starting it now")
+    svc_p.add_argument("--dry-run", action="store_true", help="Print the service definition and commands only")
 
     # Inspect-model subparser
     inspect_p = subparsers.add_parser("inspect-model", help="Inspect GGUF / Safetensors / PyTorch weights for structural safety & bytecode risks")

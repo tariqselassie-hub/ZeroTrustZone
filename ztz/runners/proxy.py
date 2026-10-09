@@ -270,6 +270,6 @@ def run_proxy(host: str = "127.0.0.1", port: int = 11434, upstream_port: int = 1
     
     print(f"\n🛡️  ZTZ Interceptor Proxy starting...")
     print(f"   Listening on: http://{host}:{port}")
-    print(f"   Forwarding to: http://{host}:{upstream_port}\n")
+    print(f"   Forwarding to: {proxy.upstream_url}\n")
     
     web.run_app(app, host=host, port=port, print=None)
