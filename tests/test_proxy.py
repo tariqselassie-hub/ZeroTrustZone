@@ -243,6 +243,56 @@ class TestEndpointClassification(unittest.TestCase):
         self.assertEqual(netcheck.classify_endpoint("127.0.0.1", free), "closed")
 
 
+
+def _free_port():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+class TestProxyHealthWithBackendOff(unittest.TestCase):
+    """Ollama is started on demand: the proxy must still be recognised while it is off."""
+
+    def _probe(self, fn):
+        async def run():
+            upstream = _free_port()  # nothing listens here
+            proxy = InferenceProxy(TrustStore([]), upstream_port=upstream, use_cache=False)
+            server = TestServer(build_app(proxy), host="127.0.0.1")
+            await server.start_server()
+            try:
+                loop = asyncio.get_running_loop()
+                started = loop.time()
+                result = await loop.run_in_executor(None, fn, "127.0.0.1", server.port)
+                return result, loop.time() - started, upstream
+            finally:
+                await server.close()
+
+        return asyncio.run(run())
+
+    def test_proxy_classified_as_ztz_fast(self):
+        kind, elapsed, _ = self._probe(netcheck.classify_endpoint)
+        self.assertEqual(kind, "ztz")
+        self.assertLess(elapsed, 1.0)
+
+    def test_proxy_reports_its_upstream_port(self):
+        port, _, upstream = self._probe(netcheck.proxy_upstream_port)
+        self.assertEqual(port, upstream)
+
+    def test_doctor_checks_backend_on_upstream_port(self):
+        from ztz.core import doctor
+        with patch.object(doctor, "classify_port", return_value={"127.0.0.1": "ztz", "::1": "closed"}), \
+             patch.object(doctor, "proxy_upstream_port", return_value=12345), \
+             patch.object(doctor, "get_ollama_base_dir", return_value=tempfile.gettempdir() + "/ztz-no-models"),              patch.object(doctor, "check_socket_port", return_value=False) as probe:
+            checks = doctor.run_diagnostics()
+        probe.assert_called_with("127.0.0.1", 12345)
+        self.assertFalse(checks["ollama"]["service_online"])
+        self.assertEqual(checks["ollama"]["backend_port"], 12345)
+        self.assertTrue(checks["proxy"]["active"])
+        self.assertIn(checks["verdict"], ("READY", "SETUP_RECOMMENDED"))  # offline backend is not a fault
+
+
 class TestOllamaModelStore(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

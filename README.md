@@ -82,7 +82,7 @@ Automatically provisions your root authority keypair (`authority_priv.pem` and `
 ```bash
 ztz doctor
 ```
-Audits your cryptography engine, loaded keys, cache health, the Ollama models directory in use, and whether the ZTZ proxy actually covers the Ollama port. A `BYPASS_RISK` verdict means something other than ZTZ also answers on that port (on `127.0.0.1` or `::1`), so clients can reach Ollama unchecked.
+Audits your cryptography engine, loaded keys, cache health, the Ollama models directory in use, and whether the ZTZ proxy actually covers the Ollama port. A `BYPASS_RISK` verdict means something other than ZTZ also answers on that port (on `127.0.0.1` or `::1`), so clients can reach Ollama unchecked. With the proxy running, the Ollama line reports the backend on the proxy's upstream port (e.g. `OFFLINE :11435`); an offline backend is normal if you start Ollama only when you need it, and does not change the verdict.
 
 ### 3. Discover & Sign Local Ollama Models in 1 Step
 ```bash
@@ -116,7 +116,7 @@ ztz service install            # add --dry-run to preview, --no-start to install
 ztz service status
 ztz service uninstall
 ```
-Service output goes to `~/.ztz/logs/proxy.log`.
+Service output goes to `~/.ztz/logs/proxy.log`. The proxy can stay up while Ollama is off: requests then get a `502` naming the upstream address to start Ollama on, and `GET /__ztz__/health` is answered by the proxy itself (`{"status": "ok", "upstream_port": 11435}`).
 
 The proxy refuses to start if anything else already listens on its port at `127.0.0.1` or `::1`: clients reaching that address would skip ZTZ entirely. The usual cause is Ollama's **Expose Ollama to the network** setting, which forces Ollama onto port 11434 on all addresses and overrides `OLLAMA_HOST`; turn it off. Clients that talk to Ollama's own port directly (including the Ollama desktop app's chat window) are not covered.
 

@@ -19,7 +19,9 @@ from ztz.core.validator import PreFlightValidator
 from ztz.core.trust_store import TrustStore
 from ztz.core.context_shield import ContextShield
 from ztz.core.model_manager import parse_modelfile_paths
-from ztz.core.netcheck import PROXY_HEADER, classify_endpoint, listening_addresses, probe_hosts
+from ztz.core.netcheck import (
+    HEALTH_PATH, PROXY_HEADER, classify_endpoint, listening_addresses, probe_hosts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,7 @@ class InferenceProxy:
         self.trust_store = trust_store
         self.validator = PreFlightValidator(self.trust_store, use_cache=use_cache)
         self.upstream_url = f"http://{upstream_host}:{upstream_port}"
+        self.upstream_port = upstream_port
         self.use_cache = use_cache
 
         # In-memory cache to completely bypass SQLite latency on sub-millisecond hot loops
@@ -81,6 +84,14 @@ class InferenceProxy:
     async def mark_response(request: web.Request, response: web.StreamResponse):
         # Lets `ztz doctor` tell the proxy apart from a backend on the same port.
         response.headers[PROXY_HEADER] = "1"
+
+    async def health(self, request: web.Request) -> web.Response:
+        """Answered locally, so probes get a fast reply whether or not the backend is up."""
+        return web.json_response({"status": "ok", "upstream_port": self.upstream_port})
+
+    def _backend_offline(self) -> str:
+        return (f"Backend not reachable at {self.upstream_url}. Start Ollama there "
+                f"(OLLAMA_HOST=127.0.0.1:{self.upstream_port}) and retry.")
 
     async def _proxy_request(self, request: web.Request, data_override: bytes = None, extra_headers: dict = None) -> web.StreamResponse:
         """Forward the request to the real backend and stream the response back natively."""
@@ -114,7 +125,9 @@ class InferenceProxy:
             if proxy_resp is not None and proxy_resp.prepared:
                 # Headers already sent; can't switch to a 502 mid-stream.
                 return proxy_resp
-            return web.json_response({"error": "Upstream backend unreachable"}, status=502)
+            return web.json_response(
+                {"error": "Upstream backend unreachable", "message": self._backend_offline()}, status=502
+            )
 
     async def _resolve_model_files(self, model_name: str) -> Tuple[List[str], Optional[str], int]:
         """
@@ -134,7 +147,7 @@ class InferenceProxy:
                     return [], f"Backend could not describe model '{model_name}' (HTTP {resp.status}).", 502
                 info = await resp.json(content_type=None)
         except Exception as e:
-            return [], f"Backend unreachable while resolving model files: {e}", 502
+            return [], f"{self._backend_offline()} ({e})", 502
 
         paths = parse_modelfile_paths((info or {}).get("modelfile") or "")
         if not paths:
@@ -282,6 +295,8 @@ def build_app(proxy: InferenceProxy) -> web.Application:
     app.on_response_prepare.append(proxy.mark_response)
 
     # Native Ollama / LocalAI
+    app.router.add_get(HEALTH_PATH, proxy.health)
+
     app.router.add_post("/api/generate", proxy.handle_inference_request)
     app.router.add_post("/api/chat", proxy.handle_inference_request)
 

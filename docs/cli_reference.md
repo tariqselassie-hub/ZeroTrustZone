@@ -20,7 +20,7 @@ ztz init
 Runs comprehensive system health, runtime connectivity, and cryptographic security diagnostics.
 - Checks Python environment & OpenSSL/Cryptography acceleration.
 - Validates trust stores and loaded authority keys (`~/.ztz/keys`, `~/.zerotrustzone/keys`, `~/.ztz/trusted_keys`; plus `./keys` when `ZTZ_TRUST_LOCAL=1`).
-- Probes the local Ollama service and the models directory it uses.
+- Probes the local Ollama service and the models directory it uses. Behind a running proxy the backend is looked for on the proxy's upstream port; an offline backend is reported, not treated as a fault.
 - Reports who answers on port 11434 at `127.0.0.1` and `::1` (`ZTZ`, `DIRECT` or closed). If the ZTZ proxy is running but another server also answers on that port, the verdict is `BYPASS_RISK`.
 - Reports Attestation Cache metrics and Context Shield secret inspection rules.
 - `--json`: Output full health diagnostics report in JSON format.
@@ -114,7 +114,7 @@ Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama (Ollama API o
 - Resolves a model's files by asking the backend (`/api/show`): weights, vision projector and LoRA adapters are all attested. Unknown models, an unreachable backend, and models with no local files (cloud models) are refused.
 - Redacts confidential credentials from `prompt`, `system` and `messages` (string content and the text parts of multimodal content lists) before forwarding; other message fields are kept.
 - Refuses to start if another process already listens on `--port` at `127.0.0.1` or `::1` (clients there would bypass ZTZ).
-- Every response carries `X-ZTZ-Proxy: 1`, which `ztz doctor` uses to tell the proxy from the backend.
+- Every response carries `X-ZTZ-Proxy: 1`. `GET /__ztz__/health` is answered by the proxy itself, even with the backend off, and reports `upstream_port`; `ztz doctor` probes it to tell the proxy from the backend.
 
 ```bash
 ztz proxy --port 11434 --upstream-port 11435

@@ -142,6 +142,8 @@ def print_doctor_report(checks: Dict[str, Any]):
     # Ollama
     o = checks.get("ollama", {})
     o_status = "ONLINE" if o.get("service_online") else "OFFLINE"
+    if o.get("backend_port"):
+        o_status += f" :{o['backend_port']}"
     o_dir = "Found" if o.get("directory_exists") else "Missing"
     o_str = f"{'✔' if o.get('service_online') else '○'} Service: {o_status} | Storage: {o_dir} ({o.get('models_count', 0)} models, {o.get('signed_models_count', 0)} signed)"
     print(f"║ Ollama Gateway : {o_str[:width-20]:<{width-19}}║")
