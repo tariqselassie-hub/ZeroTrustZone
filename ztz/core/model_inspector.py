@@ -302,6 +302,9 @@ class ModelFormatInspector:
             saw_stop = False
             for opcode, arg, pos in pickletools.genops(f):
                 if pos is not None and pos - start > cls.MAX_PICKLE_SCAN_BYTES:
+                    # Object graphs are small (tensor bytes live outside the pickle), so a
+                    # stream this long is padding meant to hide a later import: fail closed.
+                    dangerous.add("<pickle scan limit exceeded>")
                     return
                 op = opcode.name
                 if op == "GLOBAL":
@@ -312,7 +315,9 @@ class ModelFormatInspector:
                     if len(stack_strs) >= 2 and None not in stack_strs[-2:]:
                         cls._classify_global(stack_strs[-2], stack_strs[-1], dangerous, unknown)
                     else:
-                        unknown.add("<unresolved STACK_GLOBAL>")
+                        # Operands built by ops this scanner does not model (POP, DUP, ...)
+                        # could name any callable, e.g. os.system: fail closed.
+                        dangerous.add("<unresolved STACK_GLOBAL>")
                     stack_strs.clear()
                 elif op in ("SHORT_BINUNICODE", "BINUNICODE", "BINUNICODE8", "UNICODE",
                             "SHORT_BINSTRING", "BINSTRING", "STRING"):

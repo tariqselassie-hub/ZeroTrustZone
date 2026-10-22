@@ -124,6 +124,24 @@ class TestContextAttestation(unittest.TestCase):
         self.assertIn("[ZTZ_QUENCHED:DATABASE_CREDENTIALS]", clean_msgs[1]["content"])
         self.assertTrue(seal.sealed)
 
+    def test_multimodal_text_parts_scrubbed_and_fields_kept(self):
+        """OpenAI-style content lists are scrubbed part by part; images / tool_calls survive."""
+        messages = [
+            {"role": "user", "images": ["aGk="], "content": "key AKIAIOSFODNN7EXAMPLE"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "db postgresql://admin:supersecret@10.0.0.1/db"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ]},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+        ]
+        clean, findings, total, seal = ContextShield.seal_messages(messages)
+        self.assertEqual(total, 2)
+        self.assertEqual(clean[0]["images"], ["aGk="])
+        self.assertNotIn("supersecret", clean[1]["content"][0]["text"])
+        self.assertEqual(clean[1]["content"][1], messages[1]["content"][1])
+        self.assertEqual(clean[2]["tool_calls"], [{"id": "1"}])
+        self.assertIn("supersecret", messages[1]["content"][0]["text"])  # input not mutated
+
 
 if __name__ == "__main__":
     unittest.main()

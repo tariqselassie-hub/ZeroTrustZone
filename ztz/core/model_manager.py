@@ -157,6 +157,35 @@ def parse_modelfile_paths(modelfile: str) -> List[str]:
             paths.append(value)
     return paths
 
+DEFAULT_REGISTRY = "registry.ollama.ai"
+DEFAULT_NAMESPACE = "library"
+
+def _short_repo(repo: List[str]) -> List[str]:
+    """Drops the default registry and namespace, as Ollama does when it prints names."""
+    if len(repo) >= 3 and repo[0].lower() == DEFAULT_REGISTRY:
+        repo = repo[1:]
+    if len(repo) >= 2 and repo[0].lower() == DEFAULT_NAMESPACE:
+        repo = repo[1:]
+    return repo
+
+def manifest_model_name(parts: List[str]) -> str:
+    """
+    The name Ollama uses for the manifest at manifests/<parts...>:
+      registry.ollama.ai/library/llama3/latest -> llama3:latest
+      registry.ollama.ai/someuser/llama3/latest -> someuser/llama3:latest
+      hf.co/bartowski/Qwen-GGUF/Q4_K_M -> hf.co/bartowski/Qwen-GGUF:Q4_K_M
+    Keeping the namespace and host keeps two models that share a short name apart.
+    """
+    if len(parts) < 2:
+        return "/".join(parts)
+    *repo, tag = parts
+    return "/".join(_short_repo(repo)) + ":" + tag
+
+def normalize_model_name(name: str) -> str:
+    """Ollama's reading of a user-typed name: ':latest' by default, default registry/namespace dropped."""
+    repo, _, tag = name.rpartition(":") if ":" in name.rsplit("/", 1)[-1] else (name, "", "latest")
+    return "/".join(_short_repo(repo.split("/"))).lower() + ":" + tag.lower()
+
 def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Discovers all models registered in Ollama manifest directory.
@@ -169,72 +198,59 @@ def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[st
 
     models = []
     trust_store = TrustStore()
-    validator = PreFlightValidator(trust_store, use_cache=True)
+    # Closed when done: the validator holds an SQLite connection to the cache.
+    with PreFlightValidator(trust_store, use_cache=True) as validator:
+        for root, _, files in os.walk(manifests_dir):
+            for file in files:
+                full_manifest_path = os.path.join(root, file)
+                rel = os.path.relpath(full_manifest_path, manifests_dir)
+                tag = manifest_model_name(rel.replace("\\", "/").split("/"))
 
-    for root, _, files in os.walk(manifests_dir):
-        for file in files:
-            full_manifest_path = os.path.join(root, file)
-            # Reconstruct model tag from relative path
-            # e.g. manifests/registry.ollama.ai/library/llama3/latest -> llama3:latest
-            # or manifests/deepseek-r1/latest -> deepseek-r1:latest
-            rel = os.path.relpath(full_manifest_path, manifests_dir)
-            parts = rel.replace("\\", "/").split("/")
-            
-            if "library" in parts:
-                idx = parts.index("library")
-                tag_parts = parts[idx + 1:]
-            elif len(parts) >= 2:
-                tag_parts = parts[-2:]
-            else:
-                tag_parts = parts
+                info = parse_ollama_manifest_file(full_manifest_path, base_dir)
+                if not info:
+                    continue
 
-            tag = ":".join(tag_parts) if len(tag_parts) == 2 else "/".join(tag_parts)
+                blob_path = info["blob_path"]
+                sig_path = f"{blob_path}.sig"
+                # Every loaded layer (weights, projector, adapters) must carry a valid .sig.
+                has_sig = all(os.path.exists(f"{p}.sig") for p in info["blob_paths"])
 
-            info = parse_ollama_manifest_file(full_manifest_path, base_dir)
-            if not info:
-                continue
+                status = "UNSIGNED"
+                attestation_details = {}
+                if info["blob_exists"] and has_sig:
+                    for p in info["blob_paths"]:
+                        attest = validator.validate_file(p)
+                        status = attest.get("status", "FAILED")
+                        attestation_details = attest
+                        if status not in ("VERIFIED", "VERIFIED_CACHE"):
+                            break
 
-            blob_path = info["blob_path"]
-            sig_path = f"{blob_path}.sig"
-            # Every loaded layer (weights, projector, adapters) must carry a valid .sig.
-            has_sig = all(os.path.exists(f"{p}.sig") for p in info["blob_paths"])
+                # Model safety check
+                format_name = "UNKNOWN"
+                is_safe = False
+                if info["blob_exists"]:
+                    try:
+                        insp = ModelFormatInspector.inspect(blob_path)
+                        format_name = insp.format
+                        is_safe = insp.is_safe_format
+                    except Exception:
+                        pass
 
-            status = "UNSIGNED"
-            attestation_details = {}
-            if info["blob_exists"] and has_sig:
-                for p in info["blob_paths"]:
-                    attest = validator.validate_file(p)
-                    status = attest.get("status", "FAILED")
-                    attestation_details = attest
-                    if status not in ("VERIFIED", "VERIFIED_CACHE"):
-                        break
-
-            # Model safety check
-            format_name = "UNKNOWN"
-            is_safe = False
-            if info["blob_exists"]:
-                try:
-                    insp = ModelFormatInspector.inspect(blob_path)
-                    format_name = insp.format
-                    is_safe = insp.is_safe_format
-                except Exception:
-                    pass
-
-            models.append({
-                "name": tag,
-                "manifest_path": full_manifest_path,
-                "blob_path": blob_path,
-                "blob_paths": info["blob_paths"],
-                "exists": info["blob_exists"],
-                "size_bytes": info["size_bytes"],
-                "digest": info["digest"],
-                "sig_path": sig_path,
-                "has_sig": has_sig,
-                "status": status,
-                "format": format_name,
-                "is_safe_container": is_safe,
-                "attestation": attestation_details,
-            })
+                models.append({
+                    "name": tag,
+                    "manifest_path": full_manifest_path,
+                    "blob_path": blob_path,
+                    "blob_paths": info["blob_paths"],
+                    "exists": info["blob_exists"],
+                    "size_bytes": info["size_bytes"],
+                    "digest": info["digest"],
+                    "sig_path": sig_path,
+                    "has_sig": has_sig,
+                    "status": status,
+                    "format": format_name,
+                    "is_safe_container": is_safe,
+                    "attestation": attestation_details,
+                })
 
     return models
 
@@ -259,7 +275,7 @@ def resolve_model_target(model_name: str, model_base_dir: Optional[str] = None) 
     # never fall back to another tag, or ZTZ would sign a different model than
     # the one Ollama loads.
     base_dir = model_base_dir or get_ollama_base_dir()
-    search_tag = (model_name if ":" in model_name else f"{model_name}:latest").lower()
+    search_tag = normalize_model_name(model_name)
     for m in discover_ollama_models(base_dir):
         if m["name"].lower() == search_tag:
             return m

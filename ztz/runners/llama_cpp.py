@@ -54,6 +54,23 @@ REMOTE_FLAGS = frozenset({
     "--mmproj-url",
 })
 
+# llama.cpp also reads most flags from LLAMA_ARG_* environment variables
+# (LLAMA_ARG_MODEL, LLAMA_ARG_HF_REPO, ...). A file or download named there never
+# appears on the command line, so it would load unattested.
+_ENV_PREFIX = "LLAMA_ARG_"
+_ENV_FILE_MARKERS = (
+    "MODEL", "HF_", "HFD_", "MMPROJ", "LORA", "CONTROL_VECTOR", "DOCKER", "URL",
+    "PROMPT_FILE", "GRAMMAR_FILE", "JSON_SCHEMA_FILE", "CHAT_TEMPLATE_FILE", "BINARY_FILE",
+)
+
+def file_env_overrides(environ) -> List[str]:
+    """LLAMA_ARG_* variables that could make llama.cpp load or fetch a file ZTZ never saw."""
+    return sorted(
+        name for name in environ
+        if name.upper().startswith(_ENV_PREFIX)
+        and any(m in name.upper()[len(_ENV_PREFIX):] for m in _ENV_FILE_MARKERS)
+    )
+
 def _split_flag(arg: str):
     if arg.startswith("--") and "=" in arg:
         flag, value = arg.split("=", 1)
@@ -149,6 +166,15 @@ def run_llama_protected(
     if not safe_bin:
         print(f"[ZTZ ERROR] Binary not found or not executable: {llama_bin}", file=sys.stderr)
         return 127
+
+    env_files = file_env_overrides(os.environ)
+    if env_files:
+        print_lockdown_banner(
+            failed_target="<environment>",
+            reason=f"{', '.join(env_files)} set: llama.cpp would load files named there without "
+                   "attestation. Unset them and pass the files as flags instead.",
+        )
+        return 1
 
     try:
         targets = extract_target_files(safe_args)

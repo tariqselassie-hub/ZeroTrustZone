@@ -10,6 +10,7 @@ Verifies:
 
 import os
 import tempfile
+import time
 import unittest
 
 from ztz.core.cache import AttestationCache
@@ -73,6 +74,22 @@ class TestAttestationCache(unittest.TestCase):
 
         cached = self.cache.get_cached_attestation(test_file)
         self.assertIsNone(cached, "Tampered file must miss cache!")
+
+    @unittest.skipIf(os.name == "nt", "Windows st_ctime is the creation time, not the change time")
+    def test_same_size_rewrite_with_restored_mtime_misses(self):
+        """Rewriting in place and putting mtime back must not reuse the cached verdict."""
+        test_file = os.path.join(self.tmp_dir.name, "weights5.gguf")
+        with open(test_file, "wb") as f:
+            f.write(b"ORIGINAL_BYTES")
+        st = os.stat(test_file)
+        self.cache.store_attestation(test_file, auth_key="ztz_root", algo="Ed25519")
+
+        time.sleep(0.05)  # ctime comes from a coarse kernel clock; let it tick
+        with open(test_file, "r+b") as f:
+            f.write(b"MALICIOUS_BYTE")  # same length, same inode
+        os.utime(test_file, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+        self.assertIsNone(self.cache.get_cached_attestation(test_file))
 
     def test_cache_clear(self):
         """Verify clear() purges the cache."""

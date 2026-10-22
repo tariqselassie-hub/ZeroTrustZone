@@ -5,6 +5,7 @@ attestation before LLM ingestion (ZeroTrustZone Project).
 """
 
 import re
+import json
 import hashlib
 import time
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -350,41 +351,59 @@ class ContextShield:
         return result
 
     @classmethod
-    def sanitize_messages(cls, messages: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], int]:
+    def sanitize_messages(cls, messages: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
         """
         Sanitizes an entire chat history or multi-turn message array.
+        String content and the text parts of multimodal content lists
+        ([{"type": "text", "text": ...}, ...]) are scrubbed; every other field
+        (images, tool_calls, name, ...) is kept as is.
         Returns (sanitized_messages, all_findings, total_redactions).
         """
         sanitized_list = []
         all_findings = []
         total_redacted = 0
 
+        def scrub(text: str) -> str:
+            nonlocal total_redacted
+            res = cls.sanitize(text)
+            all_findings.extend(res.findings)
+            total_redacted += res.redactions_count
+            return res.clean_text
+
         for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
+            if not isinstance(msg, dict):
+                sanitized_list.append(msg)
+                continue
+            clean = dict(msg)
+            content = msg.get("content")
             if isinstance(content, str) and content:
-                res = cls.sanitize(content)
-                sanitized_list.append({"role": role, "content": res.clean_text})
-                if res.findings:
-                    all_findings.extend(res.findings)
-                    total_redacted += res.redactions_count
-            else:
-                sanitized_list.append(dict(msg))
+                clean["content"] = scrub(content)
+            elif isinstance(content, list):
+                clean["content"] = [
+                    dict(part, text=scrub(part["text"]))
+                    if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"]
+                    else part
+                    for part in content
+                ]
+            sanitized_list.append(clean)
 
         return sanitized_list, all_findings, total_redacted
 
     @classmethod
     def seal_messages(
         cls,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         enclave_url: Optional[str] = None
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], int, EnclaveSeal]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int, EnclaveSeal]:
         """
         Sanitizes an entire chat history or multi-turn message array and seals the composite payload.
+        The composite digest covers the canonical JSON of the sanitized messages (roles and
+        content included), so no two different conversations share a digest.
         Returns (sanitized_messages, all_findings, total_redactions, seal).
         """
         sanitized_list, all_findings, total_redacted = cls.sanitize_messages(messages)
-        composite_text = "||".join(m.get("content", "") for m in sanitized_list)
+        composite_text = json.dumps(sanitized_list, sort_keys=True, ensure_ascii=False,
+                                    separators=(",", ":"), default=str)
         composite_digest = hashlib.sha256(composite_text.encode("utf-8")).hexdigest()
         seal = cls.request_enclave_seal(composite_digest, enclave_url=enclave_url)
         return sanitized_list, all_findings, total_redacted, seal

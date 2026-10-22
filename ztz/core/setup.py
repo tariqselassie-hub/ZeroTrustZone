@@ -6,11 +6,22 @@ Sets up global configuration, trust store, and default Root Authority keypair.
 import os
 import json
 from typing import Dict, Any, Tuple
+from cryptography.hazmat.primitives import serialization
 from ztz.core.crypto import generate_keypair
 from ztz.core.trust_store import DEFAULT_ZTZ_STORE, TrustStore
 
 ZTZ_HOME = os.path.expanduser("~/.ztz")
 CONFIG_PATH = os.path.join(ZTZ_HOME, "config.json")
+
+def _write_public_key(priv_key_path: str, pub_key_path: str):
+    """Writes the PEM public key matching an existing private key."""
+    with open(priv_key_path, "rb") as kf:
+        priv = serialization.load_pem_private_key(kf.read(), password=None)
+    with open(pub_key_path, "wb") as f:
+        f.write(priv.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ))
 
 def init_environment(force: bool = False, key_type: str = "ed25519") -> Dict[str, Any]:
     """
@@ -26,13 +37,17 @@ def init_environment(force: bool = False, key_type: str = "ed25519") -> Dict[str
     pub_key_path = os.path.join(DEFAULT_ZTZ_STORE, "authority_pub.pem")
 
     keys_created = False
-    if force or not os.path.exists(priv_key_path) or not os.path.exists(pub_key_path):
+    if force or not os.path.exists(priv_key_path):
         priv_key_path, pub_key_path = generate_keypair(
             key_type=key_type,
             out_dir=DEFAULT_ZTZ_STORE,
             name="authority",
         )
         keys_created = True
+    elif not os.path.exists(pub_key_path):
+        # Only the public half is missing: rebuild it. Replacing the private key here
+        # would orphan every signature it made, so that takes an explicit --force.
+        _write_public_key(priv_key_path, pub_key_path)
 
     # Initialize or update config
     config = {

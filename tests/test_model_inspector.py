@@ -78,6 +78,34 @@ class TestModelFormatInspector(unittest.TestCase):
         self.assertEqual(rep.risk_level, "CRITICAL")
         self.assertTrue(any("pickle opcode" in w for w in rep.warnings))
 
+    def test_unresolved_stack_global_is_critical(self):
+        """A POP between the pushes hides 'os system' from the stack mirror; it must still block."""
+        file_path = os.path.join(self.tmp_dir.name, "obfuscated.pt")
+        with open(file_path, "wb") as f:
+            # 'os', 'system', 'x', POP, STACK_GLOBAL -> os.system('id')
+            f.write(b"\x80\x04\x8c\x02os\x8c\x06system\x8c\x01x0\x93\x8c\x02id\x85R.")
+
+        rep = ModelFormatInspector.inspect(file_path)
+        self.assertEqual(rep.risk_level, "CRITICAL")
+        self.assertIn("<unresolved STACK_GLOBAL>", rep.metadata["dangerous_imports"])
+
+    def test_scan_limit_padding_is_critical(self):
+        """Padding the stream past the scan limit must not hide a later import."""
+        file_path = os.path.join(self.tmp_dir.name, "padded.pt")
+        with open(file_path, "wb") as f:
+            # 64-byte BINBYTES pad then POP, then os.system('id') via GLOBAL
+            f.write(b"\x80\x04B" + struct.pack("<I", 64) + b"\x00" * 64 + b"0")
+            f.write(b"cos\nsystem\n\x8c\x02id\x85R.")
+
+        orig = ModelFormatInspector.MAX_PICKLE_SCAN_BYTES
+        ModelFormatInspector.MAX_PICKLE_SCAN_BYTES = 32
+        try:
+            rep = ModelFormatInspector.inspect(file_path)
+        finally:
+            ModelFormatInspector.MAX_PICKLE_SCAN_BYTES = orig
+        self.assertEqual(rep.risk_level, "CRITICAL")
+        self.assertIn("<pickle scan limit exceeded>", rep.metadata["dangerous_imports"])
+
     def test_read_path_keeps_extension_checks_on_original_name(self):
         """A pinned descriptor path has no extension; pickle detection must still use the real name."""
         blob = os.path.join(self.tmp_dir.name, "blob")

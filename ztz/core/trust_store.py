@@ -7,6 +7,7 @@ import os
 import glob
 from typing import Dict, Any, List
 from cryptography.hazmat.primitives import serialization
+from ztz.core.crypto import public_key_id
 
 DEFAULT_ZTZ_STORE = os.path.expanduser("~/.ztz/keys")
 DEFAULT_ZEROTRUSTZONE_STORE = os.path.expanduser("~/.zerotrustzone/keys")
@@ -74,6 +75,7 @@ class TrustStore:
     def reload(self):
         """Scans search paths and loads all valid public keys."""
         self.authorities.clear()
+        seen_ids = set()
         for path in self.search_paths:
             if not os.path.isdir(path):
                 continue
@@ -85,15 +87,22 @@ class TrustStore:
                     authority_name = os.path.basename(key_file).split(".")[0].replace("_pub", "")
                     try:
                         with open(key_file, "rb") as kf:
-                            key_data = kf.read()
-                            pub_key = serialization.load_pem_public_key(key_data)
-                            self.authorities[authority_name] = {
-                                "name": authority_name,
-                                "path": key_file,
-                                "key": pub_key,
-                            }
+                            pub_key = serialization.load_pem_public_key(kf.read())
                     except Exception:
                         continue
+                    key_id = public_key_id(pub_key)
+                    if key_id in seen_ids:
+                        continue  # same key reached via another pattern or folder
+                    seen_ids.add(key_id)
+                    if authority_name in self.authorities:
+                        # Two different keys share a file name (e.g. authority_pub.pem in two
+                        # roots): keep both trusted, the later one under a key-qualified name.
+                        authority_name = f"{authority_name}#{key_id[:8]}"
+                    self.authorities[authority_name] = {
+                        "name": authority_name,
+                        "path": key_file,
+                        "key": pub_key,
+                    }
 
     def get_authority(self, name: str) -> Any:
         return self.authorities.get(name)

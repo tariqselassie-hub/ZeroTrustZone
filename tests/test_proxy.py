@@ -35,6 +35,7 @@ class FakeOllama:
     def __init__(self, modelfiles):
         self.modelfiles = modelfiles  # model name -> modelfile text (None -> 404)
         self.forwarded = []
+        self.bodies = []
 
     async def show(self, request):
         name = (await request.json())["model"]
@@ -44,6 +45,7 @@ class FakeOllama:
 
     async def other(self, request):
         self.forwarded.append(request.path)
+        self.bodies.append(await request.read())
         return web.json_response({"ok": True, "path": request.path})
 
     def app(self):
@@ -119,6 +121,22 @@ class TestProxyAttestation(ProxyHarness):
                 status, _, _ = self.request("POST", path, {"model": "bad-projector", "input": "x"})
                 self.assertEqual(status, 403)
         self.assertEqual(self.upstream.forwarded, [])
+
+    def test_multimodal_chat_is_scrubbed_and_forwarded(self):
+        content = [{"type": "text", "text": "key AKIAIOSFODNN7EXAMPLE"},
+                   {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
+        status, data, _ = self.request("POST", "/v1/chat/completions",
+                                       {"model": "good", "messages": [{"role": "user", "content": content}]})
+        self.assertEqual(status, 200, data)
+        sent = json.loads(self.upstream.bodies[-1])
+        self.assertNotIn("AKIA", sent["messages"][0]["content"][0]["text"])
+        self.assertEqual(sent["messages"][0]["content"][1], content[1])
+
+    def test_generate_system_prompt_is_scrubbed(self):
+        status, _, _ = self.request("POST", "/api/generate",
+                                    {"model": "good", "prompt": "hi", "system": "use AKIAIOSFODNN7EXAMPLE"})
+        self.assertEqual(status, 200)
+        self.assertNotIn(b"AKIA", self.upstream.bodies[-1])
 
     def test_management_endpoints_pass_untouched(self):
         status, _, _ = self.request("POST", "/api/pull", {"model": "bad-projector"})

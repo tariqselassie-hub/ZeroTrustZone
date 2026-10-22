@@ -6,7 +6,7 @@ ZeroTrustZone provides a unified, zero-trust CLI accessible via `ztz` or `zerotr
 
 ### `ztz init`
 Initializes the ZeroTrustZone environment, creates configuration files, and provisions the Root Authority keypair in `~/.ztz/keys`.
-- `--force`: Force re-generation of authority keys and config files.
+- `--force`: Force re-generation of authority keys and config files. Without it an existing private key is never replaced; a missing `authority_pub.pem` is rebuilt from it.
 - `--type`: Keypair algorithm (`ed25519` or `rsa`, default: `ed25519`).
 - `--json`: Emit configuration summary in JSON format.
 
@@ -44,7 +44,7 @@ ztz models list
 ```
 
 #### `ztz models sign <model_name>`
-Resolves a model tag (e.g. `llama3.2`, `mistral:latest`) to the blobs Ollama loads for it and writes a detached signature (`.sig`) next to each, using the authority key. A bare name means `:latest`, exactly as in Ollama; another tag is never substituted. Every loaded layer is signed: the weights plus any vision projector or adapter.
+Resolves a model tag (e.g. `llama3.2`, `mistral:latest`) to the blobs Ollama loads for it and writes a detached signature (`.sig`) next to each, using the authority key. A bare name means `:latest`, exactly as in Ollama; another tag is never substituted. Namespaced and Hugging Face models are named as Ollama names them (`someuser/llama3:latest`, `hf.co/org/repo:Q4_K_M`). Every loaded layer is signed: the weights plus any vision projector or adapter.
 - `--key`: Path to private signing key (defaults to your initialized Root Authority key).
 - `--dir`: Optional custom Ollama models directory.
 - `--json`: Output signature result in JSON format.
@@ -92,7 +92,7 @@ Executes an AI runtime binary (`llama-cli` / `llama.cpp`) inside the ZTZ pre-fli
 - `--llama-bin`: Path to the underlying runtime binary (e.g., `./llama-cli`).
 - `--trust-store`: Public key directory (default: the home trust roots).
 - `--no-cache`: Bypass the attestation cache and stream-hash every file.
-- Attests every file llama.cpp would load (`-m`, `-f`, `--lora`, `-md`, `--mmproj`, `--system-prompt-file`, `--grammar-file`, …) and halts process startup if any fails. Remote-fetch flags (`-hf`, `-mu`, …) are refused.
+- Attests every file llama.cpp would load (`-m`, `-f`, `--lora`, `-md`, `--mmproj`, `--system-prompt-file`, `--grammar-file`, …) and halts process startup if any fails. Remote-fetch flags (`-hf`, `-mu`, …) are refused, and so are `LLAMA_ARG_*` environment variables that could name a file or download (`LLAMA_ARG_MODEL`, `LLAMA_ARG_HF_REPO`, …).
 - Split GGUF models (`-m model-00001-of-00003.gguf`): every shard must be present and signed; all are attested and pinned.
 - Inputs are pinned before verification and held until the runtime exits (see the README's *Anti-TOCTOU File Pinning*).
 
@@ -112,7 +112,7 @@ Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama (Ollama API o
 - `--log-file`: Append all output to this file instead of the console.
 - Attests every request that would load a model: `/api/generate`, `/api/chat`, `/api/embed`, `/v1/*`, and any other POST naming a `model`. Management calls (`/api/show`, `/api/pull`, `/api/push`, `/api/delete`, `/api/copy`, `/api/create`) pass untouched.
 - Resolves a model's files by asking the backend (`/api/show`): weights, vision projector and LoRA adapters are all attested. Unknown models, an unreachable backend, and models with no local files (cloud models) are refused.
-- Redacts confidential credentials from `prompt` and `messages` before forwarding.
+- Redacts confidential credentials from `prompt`, `system` and `messages` (string content and the text parts of multimodal content lists) before forwarding; other message fields are kept.
 - Refuses to start if another process already listens on `--port` at `127.0.0.1` or `::1` (clients there would bypass ZTZ).
 - Every response carries `X-ZTZ-Proxy: 1`, which `ztz doctor` uses to tell the proxy from the backend.
 

@@ -7,9 +7,9 @@ Before yielding the CPU/GPU to an AI process (like `llama.cpp`), ZTZ streams the
 
 ## 2. Machine-Bound SQLite Cache
 To avoid the 30+ second latency of computing SHA-256 on a 10GB+ GGUF file on every run, ZTZ caches verification states locally. 
-The cache row is **cryptographically bound** to the local hardware fingerprint, making it impossible for an attacker to spoof the SQLite cache from another machine.
+The cache row is **cryptographically bound** to the local hardware fingerprint, making it impossible for an attacker to spoof the SQLite cache from another machine. On POSIX the row is also bound to the file's ctime, which userspace cannot roll back, so a same-size in-place rewrite with a restored mtime misses the cache. The fingerprint is not a secret: the cache speeds up warm loads, it is not a barrier against a process running as the same user.
 
 ## 3. Context Shield & ZTZ Enclave
 The **Context Shield** intercepts prompts and system contexts. It uses regex-based heuristics to identify and strip sensitive tokens (API keys, passwords, etc.).
-Once sanitized, the context payload is hashed, and a request is sent to the **ZTZ Enclave (Port 5555)** to receive a hardware-attested **ZTZ DSA Signature**.
+Once sanitized, the context payload is hashed, and a request is sent to the **ZTZ Enclave (Port 5555)** to receive a hardware-attested **ZTZ DSA Signature**. The enclave URL comes from `ZTZ_ENCLAVE_URL` (default `http://127.0.0.1:5555`); if `ENCLAVE_API_TOKEN` is set it is sent as `Authorization: Bearer <token>`. ZTZ does not verify the returned `ZTZ_DSA` signature itself; consumers that rely on it must check it against the enclave's key.
 If the enclave is offline, ZTZ falls back to a **Local Authority Signature** (`LOCAL_AUTHORITY_SIG`): the payload digest is signed with the local authority private key (`ZTZ_SEAL_KEY`, else the key from `ztz init`), and anyone holding the matching public key can check it with `ContextShield.verify_local_seal()`. If no signing key is available, the seal is reported as `UNSEALED` rather than faked.

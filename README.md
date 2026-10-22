@@ -74,9 +74,9 @@ pip install -e .
 ```bash
 ztz init
 ```
-Automatically provisions your root authority keypair (`authority_priv.pem` and `authority_pub.pem`) and installs the global trust store in `~/.ztz/keys`. ZTZ now works seamlessly across any folder.
+Automatically provisions your root authority keypair (`authority_priv.pem` and `authority_pub.pem`) and installs the global trust store in `~/.ztz/keys`. ZTZ now works seamlessly across any folder. Re-running `ztz init` never replaces an existing private key (that takes `--force`); if only `authority_pub.pem` is missing, it is rebuilt from the private key.
 
-> **Trust roots:** by default ZTZ trusts public keys only from `~/.ztz/keys`, `~/.zerotrustzone/keys` and `~/.ztz/trusted_keys`. A `./keys` folder in the current directory is **not** trusted automatically (a downloaded model folder could ship its own key). Opt in per command with `--trust-store ./keys`, or globally with `ZTZ_TRUST_LOCAL=1`.
+> **Trust roots:** by default ZTZ trusts public keys only from `~/.ztz/keys`, `~/.zerotrustzone/keys` and `~/.ztz/trusted_keys`. A `./keys` folder in the current directory is **not** trusted automatically (a downloaded model folder could ship its own key). Opt in per command with `--trust-store ./keys`, or globally with `ZTZ_TRUST_LOCAL=1`. Every distinct key in those folders is trusted, even when two share a file name (the later one is listed as e.g. `authority#1a2b3c4d`).
 
 ### 2. Verify System Health & Runtime Diagnostics
 ```bash
@@ -96,7 +96,7 @@ ztz models sign llama3.2
 ztz models inspect llama3.2
 ```
 
-`ztz models sign` signs every layer Ollama loads for that tag: the weights plus any vision projector or adapter layer. The models directory comes from `OLLAMA_MODELS`, else the Ollama desktop app's own *models location* setting (Windows), else `~/.ollama/models`.
+`ztz models sign` signs every layer Ollama loads for that tag: the weights plus any vision projector or adapter layer. Model names follow Ollama's: `llama3` is the official library model, while namespaced (`someuser/llama3:latest`) and Hugging Face (`hf.co/org/repo:Q4_K_M`) models keep their prefix, so two models sharing a short name are never confused. The models directory comes from `OLLAMA_MODELS`, else the Ollama desktop app's own *models location* setting (Windows), else `~/.ollama/models`.
 
 ### 4. Verify Any File or Model Offline
 ```bash
@@ -108,7 +108,7 @@ To protect Ollama clients such as Open WebUI or Cursor without changing their co
 ```bash
 ztz proxy --port 11434 --upstream-port 11435
 ```
-ZTZ intercepts every request that would load a model (`/api/generate`, `/api/chat`, `/api/embed`, the OpenAI-compatible `/v1/*` routes, and any other POST naming a `model`; only management calls such as `/api/pull` or `/api/show` pass untouched). For each, it asks Ollama's `/api/show` which files that model loads (weights, vision projector, LoRA adapters) and attests every one before forwarding. It fails closed: an unknown model, an unreachable backend, or a model with no local files (cloud models) is refused. Prompts and chat messages are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
+ZTZ intercepts every request that would load a model (`/api/generate`, `/api/chat`, `/api/embed`, the OpenAI-compatible `/v1/*` routes, and any other POST naming a `model`; only management calls such as `/api/pull` or `/api/show` pass untouched). For each, it asks Ollama's `/api/show` which files that model loads (weights, vision projector, LoRA adapters) and attests every one before forwarding. It fails closed: an unknown model, an unreachable backend, or a model with no local files (cloud models) is refused. Prompts, `/api/generate` system prompts and chat messages (including the text parts of multimodal OpenAI-style content lists; images and tool calls are passed through untouched) are scrubbed of secrets on the way through, and each request carries `X-ZTZ-Enclave-Seal` / `X-ZTZ-Enclave-Status` headers (plus `X-ZTZ-Digest` for `prompt` requests) describing its attestation seal.
 
 To keep the proxy running in the background, install it as a per-user service (systemd user unit on Linux, launchd agent on macOS, hidden logon task on Windows; no admin rights needed). Then move Ollama to the upstream port, e.g. `OLLAMA_HOST=127.0.0.1:11435`:
 ```bash
@@ -128,7 +128,7 @@ ztz run --llama-bin ./llama-cli -m models/qwen2.5-7b-instruct-q4_k_m.gguf -f pro
 ```
 If any input file lacks a valid `.sig` or has been tampered with by even a single bit, ZTZ terminates the process with a critical lockdown banner before `llama-cli` starts.
 
-Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (`--lora`, `--lora-scaled`), draft/vocoder models (`-md`, `-mv`), multimodal projectors (`--mmproj`), control vectors, and context files (`--system-prompt-file`, `--grammar-file`, `--json-schema-file`, `--chat-template-file`, `-bf`). Flags that download weights at runtime (`-hf`, `-hff`, `-mu`, `--docker-repo`, `--mmproj-url`, …) are refused outright. All other arguments, including `--help`, are passed straight to the llama binary.
+Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (`--lora`, `--lora-scaled`), draft/vocoder models (`-md`, `-mv`), multimodal projectors (`--mmproj`), control vectors, and context files (`--system-prompt-file`, `--grammar-file`, `--json-schema-file`, `--chat-template-file`, `-bf`). Flags that download weights at runtime (`-hf`, `-hff`, `-mu`, `--docker-repo`, `--mmproj-url`, …) are refused outright. All other arguments, including `--help`, are passed straight to the llama binary. llama.cpp also reads flags from `LLAMA_ARG_*` environment variables; any that could name a file or a download (`LLAMA_ARG_MODEL`, `LLAMA_ARG_HF_REPO`, `LLAMA_ARG_MMPROJ`, …) make `ztz run` refuse to launch, since such files would never be attested. Pass them as flags instead.
 
 Split GGUF models are covered too: for `-m model-00001-of-00003.gguf`, every shard llama.cpp would load (`-00002-of-00003`, `-00003-of-00003`) must be present and carry its own valid `.sig` (sign each shard with `ztz sign`), and all of them are pinned. On Linux, llama.cpp reaches the shards through a private directory of shard-named symlinks to the pinned descriptors; ZTZ re-checks those links just before launch, but a process running as the same user could still swap them in the moment before llama.cpp opens the shards.
 
@@ -140,7 +140,7 @@ cat confidential_prompt.txt | ztz context-scan - --json
 ```
 
 ### 8. Manage the Instant Attestation Cache
-ZTZ maintains a hardware-bound SQLite cache with Windows NTFS FileIndex and POSIX inode stability to make warm loads instantaneous (<50ms). To manually purge it:
+ZTZ maintains a hardware-bound SQLite cache with Windows NTFS FileIndex and POSIX inode stability to make warm loads instantaneous (<50ms). On POSIX a row is also bound to the file's change time (ctime), so rewriting a file in place and restoring its mtime still forces a full re-hash. To manually purge it:
 ```bash
 ztz cache clear
 ```

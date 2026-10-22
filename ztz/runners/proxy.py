@@ -148,7 +148,7 @@ class InferenceProxy:
             st = os.stat(path)
         except OSError:
             return None
-        return (st.st_ino, st.st_size, st.st_mtime_ns)
+        return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
     def _memory_cache_key(self, model_path: str):
         # Covers the detached .sig too: swapping or deleting it must force a re-check.
@@ -241,6 +241,13 @@ class InferenceProxy:
             attestation_headers["X-ZTZ-Enclave-Status"] = seal.status
             if redactions > 0:
                 print(f"[{_tag('yellow', 'QUENCH')}] Neutralized {redactions} secret(s) across messages before inference.")
+
+        # /api/generate carries a separate system prompt next to the prompt.
+        if isinstance(body.get("system"), str) and body["system"]:
+            audit = ContextShield.sanitize(body["system"])
+            body["system"] = audit.clean_text
+            if audit.redactions_count > 0:
+                print(f"[{_tag('yellow', 'QUENCH')}] Neutralized {audit.redactions_count} secret(s) in system prompt before inference.")
 
         sanitized_data = json.dumps(body).encode("utf-8")
 

@@ -61,8 +61,10 @@ class AttestationCache:
             return int(hashlib.sha256(normalized).hexdigest()[:14], 16)
         return None
 
-    def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo, binding="") -> str:
-        payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}:{binding}".encode('utf-8')
+    def _sign_row(self, file_path, inode, size, mtime_ns, auth_key, algo, binding="", ctime_ns=0) -> str:
+        # ctime is signed but not stored: userspace can restore mtime after rewriting a
+        # file in place, never ctime (POSIX), so such a rewrite fails the HMAC check.
+        payload = f"{file_path}:{inode}:{size}:{mtime_ns}:{auth_key}:{algo}:{binding}:{ctime_ns}".encode('utf-8')
         return hmac.new(self.machine_key, payload, hashlib.sha256).hexdigest()
 
     def get_cached_attestation(
@@ -106,7 +108,8 @@ class AttestationCache:
             return None # Authority revoked or signature material changed
 
         # Verify the cryptographic signature of the cache row (Machine Binding + Anti-Tamper)
-        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo, binding)
+        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo, binding,
+                                      stat.st_ctime_ns)
         if not hmac.compare_digest(c_signature, expected_sig):
             return None # Tampered cache row
             
@@ -129,7 +132,7 @@ class AttestationCache:
         if inode is None:
             return # Don't cache unstable inodes
             
-        signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo, binding)
+        signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo, binding, stat.st_ctime_ns)
         
         self.safe_conn.execute('''
             INSERT OR REPLACE INTO attestation_cache (file_path, inode, size, mtime_ns, auth_key, algo, signature)
