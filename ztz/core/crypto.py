@@ -46,12 +46,14 @@ def public_key_id(public_key) -> str:
     return hashlib.sha256(der).hexdigest()[:16]
 
 def compute_file_sha256(file_path: str) -> bytes:
-    """Computes SHA-256 digest in chunks to handle multi-gigabyte GGUF models."""
-    hasher = hashlib.sha256()
+    """Computes SHA-256 digest with C-level streaming on Python 3.11+, fallback to chunked streaming."""
     with open(file_path, "rb") as f:
+        if hasattr(hashlib, "file_digest"):
+            return hashlib.file_digest(f, "sha256").digest()
+        hasher = hashlib.sha256()
         while chunk := f.read(CHUNK_SIZE):
             hasher.update(chunk)
-    return hasher.digest()
+        return hasher.digest()
 
 class ZTZSigner:
     """Administrative utility for creating detached cryptographic signatures."""

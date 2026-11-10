@@ -19,7 +19,7 @@ import sys
 import os
 import json
 import argparse
-from typing import List
+from typing import List, Any
 
 try:
     if sys.stdout.encoding != "utf-8":
@@ -51,6 +51,26 @@ from ztz.ui.banners import (
     print_doctor_report,
     print_model_inventory_table,
 )
+
+def _format_size(num_bytes: int) -> str:
+    if num_bytes >= 1024**3:
+        return f"{num_bytes / (1024**3):.2f} GB ({num_bytes:,} bytes)"
+    if num_bytes >= 1024**2:
+        return f"{num_bytes / (1024**2):.1f} MB ({num_bytes:,} bytes)"
+    if num_bytes >= 1024:
+        return f"{num_bytes / 1024:.1f} KB ({num_bytes:,} bytes)"
+    return f"{num_bytes} bytes"
+
+def _format_meta_val(key: str, val: Any) -> str:
+    if key == "parameter_count" and isinstance(val, (int, float)):
+        if val >= 1e9:
+            return f"{val:,} ({val / 1e9:.2f}B)"
+        if val >= 1e6:
+            return f"{val:,} ({val / 1e6:.1f}M)"
+        return f"{val:,}"
+    if key == "context_length" and isinstance(val, (int, float)):
+        return f"{val:,} tokens"
+    return str(val)
 
 def cmd_init(args: argparse.Namespace) -> int:
     try:
@@ -125,13 +145,13 @@ def cmd_models(args: argparse.Namespace) -> int:
             print(f"Target Model    : {args.target}")
             print(f"Physical File   : {rep.file_path}")
             print(f"Format          : {rep.format}")
-            print(f"Size            : {rep.file_size_bytes} bytes")
+            print(f"Size            : {_format_size(rep.file_size_bytes)}")
             print(f"Safety Verdict  : {'SAFE CONTAINER' if rep.is_safe_format else 'RISKY CONTAINER'}")
             print(f"Risk Level      : {rep.risk_level}")
             if rep.metadata:
                 print("Metadata        :")
                 for k, v in rep.metadata.items():
-                    print(f"  - {k:<20}: {v}")
+                    print(f"  - {k:<20}: {_format_meta_val(k, v)}")
             if rep.warnings:
                 print("Warnings        :")
                 for w in rep.warnings:
@@ -272,13 +292,13 @@ def cmd_inspect_model(args: argparse.Namespace) -> int:
     print_header(title="ZEROTRUSTZONE — MODEL WEIGHT INSPECTOR", subtitle="Container & Bytecode Security Probe")
     print(f"Target File     : {rep.file_path}")
     print(f"Format          : {rep.format}")
-    print(f"Size            : {rep.file_size_bytes} bytes")
+    print(f"Size            : {_format_size(rep.file_size_bytes)}")
     print(f"Safety Verdict  : {'SAFE CONTAINER' if rep.is_safe_format else 'RISKY CONTAINER'}")
     print(f"Risk Level      : {rep.risk_level}")
     if rep.metadata:
         print("Metadata        :")
         for k, v in rep.metadata.items():
-            print(f"  - {k:<20}: {v}")
+            print(f"  - {k:<20}: {_format_meta_val(k, v)}")
     if rep.warnings:
         print("Warnings        :")
         for w in rep.warnings:
