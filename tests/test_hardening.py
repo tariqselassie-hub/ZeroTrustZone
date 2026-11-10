@@ -95,10 +95,13 @@ class TestCacheRevocation(unittest.TestCase):
 class TestLlamaArgExtraction(unittest.TestCase):
     def test_side_loading_flags_are_targets(self):
         args = ["-m", "a.gguf", "--lora", "l.gguf", "--lora-scaled", "s.gguf", "0.5",
-                "--mmproj=p.gguf", "-md", "d.gguf", "--control-vector", "c.gguf", "-f", "p.txt"]
+                "--mmproj=p.gguf", "-md", "d.gguf", "--control-vector", "c.gguf", "-f", "p.txt",
+                "--in-file", "in.txt", "--lookup-cache-file", "lookup.bin",
+                "--draft-file", "draft.gguf", "--cfg-negative-prompt-file", "neg.txt"]
         self.assertEqual(
             extract_target_files(args),
-            ["a.gguf", "l.gguf", "s.gguf", "p.gguf", "d.gguf", "c.gguf", "p.txt"],
+            ["a.gguf", "l.gguf", "s.gguf", "p.gguf", "d.gguf", "c.gguf", "p.txt",
+             "in.txt", "lookup.bin", "draft.gguf", "neg.txt"],
         )
 
     def test_remote_fetch_refused(self):

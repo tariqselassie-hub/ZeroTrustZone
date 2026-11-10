@@ -262,6 +262,13 @@ class InferenceProxy:
             if audit.redactions_count > 0:
                 print(f"[{_tag('yellow', 'QUENCH')}] Neutralized {audit.redactions_count} secret(s) in system prompt before inference.")
 
+        # /api/generate may carry a suffix parameter for fill-in-the-middle code models.
+        if isinstance(body.get("suffix"), str) and body["suffix"]:
+            audit = ContextShield.sanitize(body["suffix"])
+            body["suffix"] = audit.clean_text
+            if audit.redactions_count > 0:
+                print(f"[{_tag('yellow', 'QUENCH')}] Neutralized {audit.redactions_count} secret(s) in suffix before inference.")
+
         sanitized_data = json.dumps(body).encode("utf-8")
 
         model_name = body.get("model")

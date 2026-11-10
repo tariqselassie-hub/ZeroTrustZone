@@ -54,7 +54,7 @@ ztz models sign llama3.2
 ```
 
 #### `ztz models inspect <model_name>`
-Resolves a model tag to disk and performs structural bytecode inspection for GGUF metadata, Safetensors headers, or dangerous PyTorch pickle opcodes.
+Resolves a model tag to disk and performs structural bytecode inspection for GGUF metadata (including architecture, parameter count, context length, embedding dimensions, layer counts, and attention heads), Safetensors headers, or dangerous PyTorch pickle opcodes. Direct $O(1)$ manifest lookup resolves models instantly without auditing unrelated inventory.
 - `--json`: Output inspection report in JSON format.
 
 ```bash
@@ -92,7 +92,7 @@ Executes an AI runtime binary (`llama-cli` / `llama.cpp`) inside the ZTZ pre-fli
 - `--llama-bin`: Path to the underlying runtime binary (e.g., `./llama-cli`).
 - `--trust-store`: Public key directory (default: the home trust roots).
 - `--no-cache`: Bypass the attestation cache and stream-hash every file.
-- Attests every file llama.cpp would load (`-m`, `-f`, `--lora`, `-md`, `--mmproj`, `--system-prompt-file`, `--grammar-file`, …) and halts process startup if any fails. Remote-fetch flags (`-hf`, `-mu`, …) are refused, and so are `LLAMA_ARG_*` environment variables that could name a file or download (`LLAMA_ARG_MODEL`, `LLAMA_ARG_HF_REPO`, …).
+- Attests every file llama.cpp would load (`-m`, `-f`, `--in-file`, `--lora`, `-md`, `--draft-file`, `--mmproj`, `--system-prompt-file`, `--grammar-file`, `--lookup-cache-file`, `--cfg-negative-prompt-file`, …) and halts process startup if any fails. Remote-fetch flags (`-hf`, `-mu`, …) are refused, and so are `LLAMA_ARG_*` environment variables that could name a file or download (`LLAMA_ARG_MODEL`, `LLAMA_ARG_HF_REPO`, `LLAMA_ARG_IN_FILE`, `LLAMA_ARG_LOOKUP_CACHE_FILE`, …).
 - Split GGUF models (`-m model-00001-of-00003.gguf`): every shard must be present and signed; all are attested and pinned.
 - Inputs are pinned before verification and held until the runtime exits (see the README's *Anti-TOCTOU File Pinning*).
 
@@ -112,7 +112,7 @@ Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama (Ollama API o
 - `--log-file`: Append all output to this file instead of the console.
 - Attests every request that would load a model: `/api/generate`, `/api/chat`, `/api/embed`, `/v1/*`, and any other POST naming a `model`. Management calls (`/api/show`, `/api/pull`, `/api/push`, `/api/delete`, `/api/copy`, `/api/create`) pass untouched.
 - Resolves a model's files by asking the backend (`/api/show`): weights, vision projector and LoRA adapters are all attested. Unknown models, an unreachable backend, and models with no local files (cloud models) are refused.
-- Redacts confidential credentials from `prompt`, `system` and `messages` (string content and the text parts of multimodal content lists) before forwarding; other message fields are kept.
+- Redacts confidential credentials from `prompt`, `system`, `suffix` and `messages` (string content and the text parts of multimodal content lists) before forwarding; other message fields are kept.
 - Refuses to start if another process already listens on `--port` at `127.0.0.1` or `::1` (clients there would bypass ZTZ).
 - Every response carries `X-ZTZ-Proxy: 1`. `GET /__ztz__/health` is answered by the proxy itself, even with the backend off, and reports `upstream_port`; `ztz doctor` probes it to tell the proxy from the backend.
 

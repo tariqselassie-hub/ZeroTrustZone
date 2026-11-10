@@ -28,18 +28,20 @@ from ztz.ui.banners import (
 FILE_FLAGS = frozenset({
     # Weights & adapters
     "-m", "--model",
-    "-md", "--model-draft",
+    "-md", "--model-draft", "--draft-model", "--draft-file",
     "-mv", "--model-vocoder",
     "-mm", "--mmproj",
     "--lora", "--lora-scaled",
     "--control-vector", "--control-vector-scaled",
     # Context payloads
-    "-f", "--file", "--prompt-file",
+    "-f", "--file", "--prompt-file", "--in-file",
     "-bf", "--binary-file",
     "-sysf", "--system-prompt-file",
     "--grammar-file",
     "-jf", "--json-schema-file",
     "--chat-template-file",
+    "--lookup-cache-file",
+    "--cfg-negative-prompt-file",
 })
 
 # Flags that make llama.cpp fetch weights from the network, bypassing local attestation.
@@ -61,6 +63,7 @@ _ENV_PREFIX = "LLAMA_ARG_"
 _ENV_FILE_MARKERS = (
     "MODEL", "HF_", "HFD_", "MMPROJ", "LORA", "CONTROL_VECTOR", "DOCKER", "URL",
     "PROMPT_FILE", "GRAMMAR_FILE", "JSON_SCHEMA_FILE", "CHAT_TEMPLATE_FILE", "BINARY_FILE",
+    "IN_FILE", "LOOKUP_CACHE", "DRAFT_FILE", "NEGATIVE_PROMPT",
 )
 
 def file_env_overrides(environ) -> List[str]:

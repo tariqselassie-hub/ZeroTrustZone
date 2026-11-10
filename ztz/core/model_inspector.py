@@ -144,6 +144,77 @@ class ModelFormatInspector:
         )
 
     @classmethod
+    def _read_gguf_string(cls, f) -> str:
+        len_bytes = f.read(8)
+        if len(len_bytes) < 8:
+            return ""
+        s_len = struct.unpack("<Q", len_bytes)[0]
+        if s_len == 0:
+            return ""
+        if s_len > 64 * 1024:
+            f.seek(s_len, io.SEEK_CUR)
+            return "<TRUNCATED_STRING>"
+        s_bytes = f.read(s_len)
+        return s_bytes.decode("utf-8", errors="replace")
+
+    @classmethod
+    def _read_gguf_value(cls, f, val_type: int) -> Any:
+        if val_type == 0:
+            return struct.unpack("<B", f.read(1))[0]
+        elif val_type == 1:
+            return struct.unpack("<b", f.read(1))[0]
+        elif val_type == 2:
+            return struct.unpack("<H", f.read(2))[0]
+        elif val_type == 3:
+            return struct.unpack("<h", f.read(2))[0]
+        elif val_type == 4:
+            return struct.unpack("<I", f.read(4))[0]
+        elif val_type == 5:
+            return struct.unpack("<i", f.read(4))[0]
+        elif val_type == 6:
+            return struct.unpack("<f", f.read(4))[0]
+        elif val_type == 7:
+            return bool(struct.unpack("<B", f.read(1))[0])
+        elif val_type == 8:
+            return cls._read_gguf_string(f)
+        elif val_type == 9:
+            item_type = struct.unpack("<I", f.read(4))[0]
+            arr_len = struct.unpack("<Q", f.read(8))[0]
+            if arr_len > 64:
+                cls._skip_gguf_array(f, item_type, arr_len)
+                return f"<ARRAY[{arr_len}]>"
+            items = []
+            for _ in range(arr_len):
+                items.append(cls._read_gguf_value(f, item_type))
+            return items
+        elif val_type == 10:
+            return struct.unpack("<Q", f.read(8))[0]
+        elif val_type == 11:
+            return struct.unpack("<q", f.read(8))[0]
+        elif val_type == 12:
+            return struct.unpack("<d", f.read(8))[0]
+        else:
+            raise ValueError(f"Unknown GGUF value type: {val_type}")
+
+    @classmethod
+    def _skip_gguf_array(cls, f, item_type: int, arr_len: int):
+        sizes = {
+            0: 1, 1: 1, 7: 1,
+            2: 2, 3: 2,
+            4: 4, 5: 4, 6: 4,
+            10: 8, 11: 8, 12: 8,
+        }
+        if item_type in sizes:
+            f.seek(arr_len * sizes[item_type], io.SEEK_CUR)
+        elif item_type == 8:
+            for _ in range(arr_len):
+                s_len = struct.unpack("<Q", f.read(8))[0]
+                f.seek(s_len, io.SEEK_CUR)
+        else:
+            for _ in range(arr_len):
+                cls._read_gguf_value(f, item_type)
+
+    @classmethod
     def _inspect_gguf(cls, file_path: str, file_size: int) -> ModelInspectionReport:
         warnings = []
         metadata = {}
@@ -160,6 +231,48 @@ class ModelFormatInspector:
 
                 if version not in (2, 3):
                     warnings.append(f"GGUF version {version} is deprecated or non-standard (expected v2 or v3).")
+
+                # Parse KV metadata safely up to limit (max 10,000 keys or 32MB header)
+                try:
+                    max_kv = min(kv_count, 10000)
+                    parsed_kv = {}
+                    for _ in range(max_kv):
+                        if f.tell() >= file_size or f.tell() > 32 * 1024 * 1024:
+                            break
+                        key = cls._read_gguf_string(f)
+                        if not key:
+                            continue
+                        val_type_bytes = f.read(4)
+                        if len(val_type_bytes) < 4:
+                            break
+                        val_type = struct.unpack("<I", val_type_bytes)[0]
+                        val = cls._read_gguf_value(f, val_type)
+                        parsed_kv[key] = val
+
+                    # Promote architectural parameters of interest
+                    arch = parsed_kv.get("general.architecture")
+                    if arch:
+                        metadata["architecture"] = arch
+                        for suffix, out_key in (
+                            ("context_length", "context_length"),
+                            ("embedding_length", "embedding_length"),
+                            ("block_count", "block_count"),
+                            ("feed_forward_length", "feed_forward_length"),
+                            ("attention.head_count", "head_count"),
+                            ("attention.head_count_kv", "head_count_kv"),
+                        ):
+                            full_key = f"{arch}.{suffix}"
+                            if full_key in parsed_kv:
+                                metadata[out_key] = parsed_kv[full_key]
+
+                    if "general.parameter_count" in parsed_kv:
+                        metadata["parameter_count"] = parsed_kv["general.parameter_count"]
+                    if "general.name" in parsed_kv:
+                        metadata["model_name"] = parsed_kv["general.name"]
+                    if "general.file_type" in parsed_kv:
+                        metadata["file_type"] = parsed_kv["general.file_type"]
+                except Exception:
+                    pass
 
             return ModelInspectionReport(
                 file_path=file_path,

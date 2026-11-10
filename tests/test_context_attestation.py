@@ -142,6 +142,27 @@ class TestContextAttestation(unittest.TestCase):
         self.assertEqual(clean[2]["tool_calls"], [{"id": "1"}])
         self.assertIn("supersecret", messages[1]["content"][0]["text"])  # input not mutated
 
+    def test_sanitize_duplicate_secrets_and_exact_offsets(self):
+        """Verify duplicate secrets preserve exact source offsets and are cleanly masked without corruption."""
+        key = "sk-1234567890abcdef1234567890abcdef1234"
+        text = f"First: {key} ... Second: {key}."
+        
+        result = ContextShield.sanitize(text)
+        self.assertEqual(result.redactions_count, 2)
+        self.assertEqual(len(result.findings), 2)
+        
+        # Verify exact offsets match original positions
+        first_offset = text.find(key)
+        second_offset = text.rfind(key)
+        self.assertEqual(result.findings[0]["offset"], first_offset)
+        self.assertEqual(result.findings[0]["length"], len(key))
+        self.assertEqual(result.findings[1]["offset"], second_offset)
+        self.assertEqual(result.findings[1]["length"], len(key))
+        
+        # Verify clean_text contains both masks
+        expected = f"First: [ZTZ_QUENCHED:OPENAI_API_KEY] ... Second: [ZTZ_QUENCHED:OPENAI_API_KEY]."
+        self.assertEqual(result.clean_text, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

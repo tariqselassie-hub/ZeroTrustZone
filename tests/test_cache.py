@@ -101,6 +101,27 @@ class TestAttestationCache(unittest.TestCase):
         self.cache.clear()
         self.assertIsNone(self.cache.get_cached_attestation(test_file))
 
+    def test_cache_path_normalization(self):
+        """Verify path normalization ensures cache hits across relative, redundant, and case variations."""
+        test_file = os.path.join(self.tmp_dir.name, "weights_norm.gguf")
+        with open(test_file, "wb") as f:
+            f.write(b"DATA_NORM_CACHE")
+
+        # Store using redundant path representation
+        redundant_path = os.path.join(self.tmp_dir.name, ".", "weights_norm.gguf")
+        self.cache.store_attestation(redundant_path, auth_key="ztz_root", algo="Ed25519")
+
+        # Retrieve using standard absolute path
+        hit_abs = self.cache.get_cached_attestation(test_file)
+        self.assertIsNotNone(hit_abs, "Absolute path should hit cache stored with redundant path")
+        self.assertEqual(hit_abs["key"], "ztz_root")
+
+        # Retrieve using case variation on Windows
+        if os.name == "nt":
+            hit_case = self.cache.get_cached_attestation(test_file.upper())
+            self.assertIsNotNone(hit_case, "Case-varied path on Windows should hit cache")
+            self.assertEqual(hit_case["key"], "ztz_root")
+
 
 if __name__ == "__main__":
     unittest.main()

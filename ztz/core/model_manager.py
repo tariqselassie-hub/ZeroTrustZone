@@ -186,6 +186,106 @@ def normalize_model_name(name: str) -> str:
     repo, _, tag = name.rpartition(":") if ":" in name.rsplit("/", 1)[-1] else (name, "", "latest")
     return "/".join(_short_repo(repo.split("/"))).lower() + ":" + tag.lower()
 
+def _build_model_record(
+    full_manifest_path: str,
+    base_dir: str,
+    tag: str,
+    validator: Optional[PreFlightValidator] = None,
+) -> Optional[Dict[str, Any]]:
+    """Builds a complete model record for a specific manifest path."""
+    info = parse_ollama_manifest_file(full_manifest_path, base_dir)
+    if not info:
+        return None
+
+    blob_path = info["blob_path"]
+    sig_path = f"{blob_path}.sig"
+    has_sig = all(os.path.exists(f"{p}.sig") for p in info["blob_paths"])
+
+    status = "UNSIGNED"
+    attestation_details = {}
+    if info["blob_exists"] and has_sig:
+        close_validator = False
+        val = validator
+        if val is None:
+            val = PreFlightValidator(TrustStore(), use_cache=True)
+            close_validator = True
+        try:
+            for p in info["blob_paths"]:
+                attest = val.validate_file(p)
+                status = attest.get("status", "FAILED")
+                attestation_details = attest
+                if status not in ("VERIFIED", "VERIFIED_CACHE"):
+                    break
+        finally:
+            if close_validator:
+                val.close()
+
+    # Model safety check
+    format_name = "UNKNOWN"
+    is_safe = False
+    if info["blob_exists"]:
+        try:
+            insp = ModelFormatInspector.inspect(blob_path)
+            format_name = insp.format
+            is_safe = insp.is_safe_format
+        except Exception:
+            pass
+
+    return {
+        "name": tag,
+        "manifest_path": full_manifest_path,
+        "blob_path": blob_path,
+        "blob_paths": info["blob_paths"],
+        "exists": info["blob_exists"],
+        "size_bytes": info["size_bytes"],
+        "digest": info["digest"],
+        "sig_path": sig_path,
+        "has_sig": has_sig,
+        "status": status,
+        "format": format_name,
+        "is_safe_container": is_safe,
+        "attestation": attestation_details,
+    }
+
+def _find_manifest_path(base_dir: str, search_tag: str) -> Optional[tuple[str, str]]:
+    """
+    Finds (full_manifest_path, tag) for search_tag in O(1) direct lookup where possible,
+    falling back to path-only directory scan (without reading or auditing other models).
+    """
+    manifests_dir = os.path.join(base_dir, "manifests")
+    if not os.path.isdir(manifests_dir):
+        return None
+
+    repo_str, _, tag = search_tag.partition(":")
+    tag = tag or "latest"
+    parts = [p for p in repo_str.split("/") if p]
+
+    # Direct candidate paths (O(1) checks)
+    candidates = []
+    if len(parts) == 1:
+        candidates.append(os.path.join(manifests_dir, DEFAULT_REGISTRY, DEFAULT_NAMESPACE, parts[0], tag))
+    elif len(parts) == 2:
+        candidates.append(os.path.join(manifests_dir, DEFAULT_REGISTRY, parts[0], parts[1], tag))
+    candidates.append(os.path.join(manifests_dir, *parts, tag))
+
+    for cand in candidates:
+        if os.path.isfile(cand):
+            rel = os.path.relpath(cand, manifests_dir)
+            model_tag = manifest_model_name(rel.replace("\\", "/").split("/"))
+            if model_tag.lower() == search_tag:
+                return cand, model_tag
+
+    # Fallback: scan manifests_dir matching only file paths/names (no file reads or validation)
+    for root, _, files in os.walk(manifests_dir):
+        for file in files:
+            full_path = os.path.join(root, file)
+            rel = os.path.relpath(full_path, manifests_dir)
+            model_tag = manifest_model_name(rel.replace("\\", "/").split("/"))
+            if model_tag.lower() == search_tag:
+                return full_path, model_tag
+
+    return None
+
 def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Discovers all models registered in Ollama manifest directory.
@@ -206,58 +306,16 @@ def discover_ollama_models(model_base_dir: Optional[str] = None) -> List[Dict[st
                 rel = os.path.relpath(full_manifest_path, manifests_dir)
                 tag = manifest_model_name(rel.replace("\\", "/").split("/"))
 
-                info = parse_ollama_manifest_file(full_manifest_path, base_dir)
-                if not info:
-                    continue
-
-                blob_path = info["blob_path"]
-                sig_path = f"{blob_path}.sig"
-                # Every loaded layer (weights, projector, adapters) must carry a valid .sig.
-                has_sig = all(os.path.exists(f"{p}.sig") for p in info["blob_paths"])
-
-                status = "UNSIGNED"
-                attestation_details = {}
-                if info["blob_exists"] and has_sig:
-                    for p in info["blob_paths"]:
-                        attest = validator.validate_file(p)
-                        status = attest.get("status", "FAILED")
-                        attestation_details = attest
-                        if status not in ("VERIFIED", "VERIFIED_CACHE"):
-                            break
-
-                # Model safety check
-                format_name = "UNKNOWN"
-                is_safe = False
-                if info["blob_exists"]:
-                    try:
-                        insp = ModelFormatInspector.inspect(blob_path)
-                        format_name = insp.format
-                        is_safe = insp.is_safe_format
-                    except Exception:
-                        pass
-
-                models.append({
-                    "name": tag,
-                    "manifest_path": full_manifest_path,
-                    "blob_path": blob_path,
-                    "blob_paths": info["blob_paths"],
-                    "exists": info["blob_exists"],
-                    "size_bytes": info["size_bytes"],
-                    "digest": info["digest"],
-                    "sig_path": sig_path,
-                    "has_sig": has_sig,
-                    "status": status,
-                    "format": format_name,
-                    "is_safe_container": is_safe,
-                    "attestation": attestation_details,
-                })
+                record = _build_model_record(full_manifest_path, base_dir, tag, validator=validator)
+                if record:
+                    models.append(record)
 
     return models
 
 def resolve_model_target(model_name: str, model_base_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Resolves a model name (e.g. 'llama3.2', 'llama3:latest', or a direct file path)
-    to its physical file path on disk.
+    to its physical file path on disk without scanning all unrelated models.
     """
     # 1. Direct path check
     if os.path.exists(model_name):
@@ -271,14 +329,13 @@ def resolve_model_target(model_name: str, model_base_dir: Optional[str] = None) 
             "has_sig": os.path.exists(f"{os.path.abspath(model_name)}.sig"),
         }
 
-    # 2. Ollama manifest search. Same rule as Ollama: a bare name means ':latest';
-    # never fall back to another tag, or ZTZ would sign a different model than
-    # the one Ollama loads.
+    # 2. Ollama manifest search: direct O(1) lookup first, never auditing unrelated models.
     base_dir = model_base_dir or get_ollama_base_dir()
     search_tag = normalize_model_name(model_name)
-    for m in discover_ollama_models(base_dir):
-        if m["name"].lower() == search_tag:
-            return m
+    found = _find_manifest_path(base_dir, search_tag)
+    if found:
+        full_manifest_path, tag = found
+        return _build_model_record(full_manifest_path, base_dir, tag)
     return None
 
 def sign_model_target(

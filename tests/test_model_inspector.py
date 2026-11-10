@@ -42,6 +42,55 @@ class TestModelFormatInspector(unittest.TestCase):
         self.assertEqual(rep.metadata["tensor_count"], 320)
         self.assertEqual(rep.metadata["kv_metadata_count"], 18)
 
+    def test_gguf_kv_metadata_parameter_extraction(self):
+        """Verify architectural parameters and KV metadata are extracted from GGUF containers."""
+        def encode_str(s: str) -> bytes:
+            return struct.pack("<Q", len(s)) + s.encode("utf-8")
+
+        payload = bytearray()
+        payload += b"GGUF"  # magic
+        payload += struct.pack("<I", 3)  # version 3
+        payload += struct.pack("<Q", 291)  # tensor count
+        payload += struct.pack("<Q", 5)  # kv count
+
+        # 1. general.architecture = "llama" (type 8 = string)
+        payload += encode_str("general.architecture")
+        payload += struct.pack("<I", 8)
+        payload += encode_str("llama")
+
+        # 2. llama.context_length = 8192 (type 4 = uint32)
+        payload += encode_str("llama.context_length")
+        payload += struct.pack("<I", 4)
+        payload += struct.pack("<I", 8192)
+
+        # 3. llama.embedding_length = 4096 (type 4 = uint32)
+        payload += encode_str("llama.embedding_length")
+        payload += struct.pack("<I", 4)
+        payload += struct.pack("<I", 4096)
+
+        # 4. llama.block_count = 32 (type 4 = uint32)
+        payload += encode_str("llama.block_count")
+        payload += struct.pack("<I", 4)
+        payload += struct.pack("<I", 32)
+
+        # 5. general.parameter_count = 8030000000 (type 10 = uint64)
+        payload += encode_str("general.parameter_count")
+        payload += struct.pack("<I", 10)
+        payload += struct.pack("<Q", 8030000000)
+
+        file_path = os.path.join(self.tmp_dir.name, "param_model.gguf")
+        with open(file_path, "wb") as f:
+            f.write(payload)
+
+        rep = ModelFormatInspector.inspect(file_path)
+        self.assertEqual(rep.format, "GGUF")
+        self.assertTrue(rep.is_safe_format)
+        self.assertEqual(rep.metadata["architecture"], "llama")
+        self.assertEqual(rep.metadata["context_length"], 8192)
+        self.assertEqual(rep.metadata["embedding_length"], 4096)
+        self.assertEqual(rep.metadata["block_count"], 32)
+        self.assertEqual(rep.metadata["parameter_count"], 8030000000)
+
     def test_safetensors_valid_header(self):
         """Verify Safetensors header is recognized and tensor count extracted."""
         file_path = os.path.join(self.tmp_dir.name, "model.safetensors")

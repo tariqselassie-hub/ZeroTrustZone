@@ -52,12 +52,17 @@ class AttestationCache:
         ''', ())
         self.safe_conn.commit()
 
+    @staticmethod
+    def normalize_cache_path(file_path: str) -> str:
+        """Normalizes file path for stable cache indexing across relative/absolute and Windows casing."""
+        return os.path.normcase(os.path.abspath(file_path))
+
     def _resolve_inode(self, file_path: str, stat_ino: int) -> Optional[int]:
         if stat_ino != 0:
             return stat_ino
         if sys.platform == "win32":
             # On Windows NTFS/FAT, os.stat.st_ino may be 0; compute stable 56-bit pseudo-inode from path
-            normalized = os.path.abspath(file_path).lower().encode('utf-8')
+            normalized = self.normalize_cache_path(file_path).encode('utf-8')
             return int(hashlib.sha256(normalized).hexdigest()[:14], 16)
         return None
 
@@ -81,18 +86,19 @@ class AttestationCache:
         stat_path (e.g. a pinned /proc/self/fd/N) is stat'ed instead of file_path, so
         the hit describes the file that will actually be loaded.
         """
+        norm_file_path = self.normalize_cache_path(file_path)
         stat_path = stat_path or file_path
         if not os.path.exists(stat_path):
             return None
             
         stat = os.stat(stat_path)
         size, mtime_ns = stat.st_size, stat.st_mtime_ns
-        inode = self._resolve_inode(file_path, stat.st_ino)
+        inode = self._resolve_inode(norm_file_path, stat.st_ino)
         
         if inode is None:
             return None # Unstable inode on remote/unsupported NAS share
             
-        cur = self.safe_conn.execute('SELECT inode, size, mtime_ns, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (file_path,))
+        cur = self.safe_conn.execute('SELECT inode, size, mtime_ns, auth_key, algo, signature FROM attestation_cache WHERE file_path = ?', (norm_file_path,))
         row = cur.fetchone()
         if not row:
             return None
@@ -108,7 +114,7 @@ class AttestationCache:
             return None # Authority revoked or signature material changed
 
         # Verify the cryptographic signature of the cache row (Machine Binding + Anti-Tamper)
-        expected_sig = self._sign_row(file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo, binding,
+        expected_sig = self._sign_row(norm_file_path, c_inode, c_size, c_mtime_ns, c_auth_key, c_algo, binding,
                                       stat.st_ctime_ns)
         if not hmac.compare_digest(c_signature, expected_sig):
             return None # Tampered cache row
@@ -122,22 +128,23 @@ class AttestationCache:
 
     def store_attestation(self, file_path: str, auth_key: str, algo: str, binding: str = "",
                           stat_path: Optional[str] = None):
+        norm_file_path = self.normalize_cache_path(file_path)
         stat_path = stat_path or file_path
         if not os.path.exists(stat_path):
             return
         stat = os.stat(stat_path)
         size, mtime_ns = stat.st_size, stat.st_mtime_ns
-        inode = self._resolve_inode(file_path, stat.st_ino)
+        inode = self._resolve_inode(norm_file_path, stat.st_ino)
         
         if inode is None:
             return # Don't cache unstable inodes
             
-        signature = self._sign_row(file_path, inode, size, mtime_ns, auth_key, algo, binding, stat.st_ctime_ns)
+        signature = self._sign_row(norm_file_path, inode, size, mtime_ns, auth_key, algo, binding, stat.st_ctime_ns)
         
         self.safe_conn.execute('''
             INSERT OR REPLACE INTO attestation_cache (file_path, inode, size, mtime_ns, auth_key, algo, signature)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (file_path, inode, size, mtime_ns, auth_key, algo, signature))
+        ''', (norm_file_path, inode, size, mtime_ns, auth_key, algo, signature))
         self.safe_conn.commit()
         
     def clear(self):
