@@ -54,12 +54,13 @@ def _tag(color: str, text: str) -> str:
 
 
 class InferenceProxy:
-    def __init__(self, trust_store: TrustStore, upstream_host: str = "127.0.0.1", upstream_port: int = 11435, use_cache: bool = True):
+    def __init__(self, trust_store: TrustStore, upstream_host: str = "127.0.0.1", upstream_port: int = 11435, use_cache: bool = True, strict_shield: bool = False):
         self.trust_store = trust_store
         self.validator = PreFlightValidator(self.trust_store, use_cache=use_cache)
         self.upstream_url = f"http://{upstream_host}:{upstream_port}"
         self.upstream_port = upstream_port
         self.use_cache = use_cache
+        self.strict_shield = strict_shield or (os.environ.get("ZTZ_STRICT_SHIELD") == "1")
 
         # In-memory cache to completely bypass SQLite latency on sub-millisecond hot loops
         # Maps model_path -> (model stat key, sig stat key)
@@ -259,6 +260,7 @@ class InferenceProxy:
         if isinstance(body.get("system"), str) and body["system"]:
             audit = ContextShield.sanitize(body["system"])
             body["system"] = audit.clean_text
+            redactions += audit.redactions_count
             if audit.redactions_count > 0:
                 print(f"[{_tag('yellow', 'QUENCH')}] Neutralized {audit.redactions_count} secret(s) in system prompt before inference.")
 
@@ -266,8 +268,17 @@ class InferenceProxy:
         if isinstance(body.get("suffix"), str) and body["suffix"]:
             audit = ContextShield.sanitize(body["suffix"])
             body["suffix"] = audit.clean_text
+            redactions += audit.redactions_count
             if audit.redactions_count > 0:
                 print(f"[{_tag('yellow', 'QUENCH')}] Neutralized {audit.redactions_count} secret(s) in suffix before inference.")
+
+        if self.strict_shield and redactions > 0:
+            print(f"[{_tag('red', 'BLOCK')}] Strict Context Shield blocked request ({redactions} secret(s) detected).")
+            return web.json_response({
+                "error": "ZTZ Context Shield Lockdown",
+                "message": f"Request blocked by strict Context Shield: {redactions} secret(s) detected.",
+                "redactions_count": redactions,
+            }, status=403)
 
         sanitized_data = json.dumps(body).encode("utf-8")
 
@@ -335,10 +346,10 @@ def assert_port_free(host: str, port: int, upstream_port: int):
         )
 
 
-def run_proxy(host: str = "127.0.0.1", port: int = 11434, upstream_port: int = 11435, trust_store_path: str = None, use_cache: bool = True):
+def run_proxy(host: str = "127.0.0.1", port: int = 11434, upstream_port: int = 11435, trust_store_path: str = None, use_cache: bool = True, strict_shield: bool = False):
     assert_port_free(host, port, upstream_port)
     trust_store = TrustStore([trust_store_path] if trust_store_path else None)
-    proxy = InferenceProxy(trust_store, upstream_port=upstream_port, use_cache=use_cache)
+    proxy = InferenceProxy(trust_store, upstream_port=upstream_port, use_cache=use_cache, strict_shield=strict_shield)
     app = build_app(proxy)
 
     print(f"\n🛡️  ZTZ Interceptor Proxy starting...")

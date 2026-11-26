@@ -5,6 +5,7 @@ attestation before LLM ingestion (ZeroTrustZone Project).
 """
 
 import re
+import os
 import json
 import hashlib
 import time
@@ -69,6 +70,52 @@ SECRET_PATTERNS = [
         re.compile(r"""(?i)\b(?:api_key|apikey|secret_key|private_key|auth_token|access_token|password|passwd|pwd)\s*[:=]\s*['"]([a-zA-Z0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?/`~]{8,128})['"]""")
     ),
 ]
+
+
+DEFAULT_SHIELD_RULES_PATH = os.path.expanduser("~/.ztz/shield_rules.json")
+SHIELD_RULES_ENV = "ZTZ_SHIELD_RULES"
+STRICT_SHIELD_ENV = "ZTZ_STRICT_SHIELD"
+_custom_rules_cache: Dict[Tuple[str, int], List[Tuple[str, re.Pattern]]] = {}
+
+
+def load_custom_rules(rules_path: Optional[str] = None) -> List[Tuple[str, re.Pattern]]:
+    """
+    Loads optional user-defined regex rules from ZTZ_SHIELD_RULES or ~/.ztz/shield_rules.json.
+    Expected JSON format: [{"name": "RULE_NAME", "pattern": "...", "ignore_case": false}, ...]
+    """
+    path = rules_path or os.environ.get(SHIELD_RULES_ENV) or DEFAULT_SHIELD_RULES_PATH
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        cache_key = (os.path.abspath(path), os.stat(path).st_mtime_ns)
+    except OSError:
+        return []
+    if cache_key in _custom_rules_cache:
+        return _custom_rules_cache[cache_key]
+
+    loaded: List[Tuple[str, re.Pattern]] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", "")).strip()
+                pat = entry.get("pattern")
+                if not name or not isinstance(pat, str) or not pat:
+                    continue
+                flags = re.IGNORECASE if entry.get("ignore_case") else 0
+                try:
+                    loaded.append((name, re.compile(pat, flags)))
+                except re.error:
+                    continue
+    except Exception:
+        return []
+
+    _custom_rules_cache.clear()
+    _custom_rules_cache[cache_key] = loaded
+    return loaded
 
 
 class EnclaveSeal:
@@ -187,11 +234,21 @@ class ContextShield:
                 self._private_key = None
 
     @classmethod
-    def sanitize(cls, text: str) -> ContextAuditResult:
+    def all_patterns(cls) -> List[Tuple[str, re.Pattern]]:
+        """Returns built-in SECRET_PATTERNS plus any valid custom rules."""
+        custom = load_custom_rules()
+        return SECRET_PATTERNS + custom if custom else SECRET_PATTERNS
+
+    @classmethod
+    def sanitize(cls, text: str, strict: Optional[bool] = None) -> ContextAuditResult:
         """
         Sanitizes a single text block, masking detected credentials.
         Returns ContextAuditResult with clean text and audit trail.
+        When strict=True (or ZTZ_STRICT_SHIELD=1), passed_preflight is False if any secrets are found.
         """
+        if strict is None:
+            strict = os.environ.get(STRICT_SHIELD_ENV) == "1"
+
         if not text or not isinstance(text, str):
             return ContextAuditResult(
                 clean_text=text or "",
@@ -207,7 +264,7 @@ class ContextShield:
         spans = []  # list of (start, end, category, mask)
         findings = []
 
-        for category, pattern in SECRET_PATTERNS:
+        for category, pattern in cls.all_patterns():
             for match in pattern.finditer(text):
                 start, end = match.start(), match.end()
                 # Check for overlap with already-accepted higher-priority patterns
@@ -244,7 +301,7 @@ class ContextShield:
             findings=findings,
             digest_sha256=digest,
             timestamp=time.time(),
-            passed_preflight=True
+            passed_preflight=not (strict and len(spans) > 0)
         )
 
     @classmethod

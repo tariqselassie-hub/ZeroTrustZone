@@ -92,7 +92,10 @@ ztz models list
 # Automatically resolve and sign an Ollama model tag (a bare name means ':latest', as in Ollama)
 ztz models sign llama3.2
 
-# Structural container inspection for bytecode / pickle risks
+# Verify all attested layers of an Ollama model tag
+ztz models verify llama3.2
+
+# Structural container inspection for bytecode / pickle / SSTI / external-data risks
 ztz models inspect llama3.2
 ```
 
@@ -133,7 +136,7 @@ Every file llama.cpp would load is attested, not just `-m`/`-f`: LoRA adapters (
 Split GGUF models are covered too: for `-m model-00001-of-00003.gguf`, every shard llama.cpp would load (`-00002-of-00003`, `-00003-of-00003`) must be present and carry its own valid `.sig` (sign each shard with `ztz sign`), and all of them are pinned. On Linux, llama.cpp reaches the shards through a private directory of shard-named symlinks to the pinned descriptors; ZTZ re-checks those links just before launch, but a process running as the same user could still swap them in the moment before llama.cpp opens the shards.
 
 ### 7. Pre-Flight Context Scanning & Secret Scrubbing
-Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), OpenAI and Anthropic API keys (including long `sk-proj-` / `sk-ant-api03-` keys, always masked in full), GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments:
+Neutralize credentials before feeding prompts into inference engines. Built-in rules cover PEM private keys (RSA, EC, DSA, OpenSSH, PGP), OpenAI and Anthropic API keys (including long `sk-proj-` / `sk-ant-api03-` keys, always masked in full), GitHub tokens, AWS access key IDs, Google API keys, Slack tokens, JWTs, database URIs with embedded credentials, and quoted `password=`/`api_key=`-style assignments. You can add custom regex rules via `~/.ztz/shield_rules.json` (or `ZTZ_SHIELD_RULES`), and block requests on any leak with `ZTZ_STRICT_SHIELD=1` or `ztz proxy --strict-shield`:
 ```bash
 ztz context-scan "Deploy with AWS key AKIAIOSFODNN7EXAMPLE" --out sanitized_prompt.txt
 cat confidential_prompt.txt | ztz context-scan - --json

@@ -157,8 +157,27 @@ def cmd_models(args: argparse.Namespace) -> int:
                 for w in rep.warnings:
                     print(f"  ⚠ {w}")
         return 0 if rep.is_safe_format else 1
+    elif action == "verify":
+        target_info = resolve_model_target(args.target, args.dir)
+        if not target_info:
+            print(f"[ERROR] Model not found: {args.target}", file=sys.stderr)
+            return 1
+        blob_paths = target_info.get("blob_paths") or [target_info["blob_path"]]
+        trust_store = TrustStore([args.trust_store] if args.trust_store else None)
+        with PreFlightValidator(trust_store, use_cache=not args.no_cache) as validator:
+            all_clean, rows, _ = validator.audit_batch(blob_paths)
+        if getattr(args, "json", False):
+            print(json.dumps({"model": target_info.get("name", args.target), "verified": all_clean, "layers": rows}, indent=2))
+        else:
+            print_audit_table(rows)
+            if all_clean:
+                print(f"[PASS] All {len(rows)} layer(s) for '{target_info.get('name', args.target)}' verified.")
+            else:
+                failed = next((r for r in rows if r["status"] not in ("VERIFIED", "VERIFIED_CACHE")), rows[0])
+                print_lockdown_banner(failed["full_path"], reason=f"{failed['status']}: {failed['error']}")
+        return 0 if all_clean else 1
     else:
-        print("[ERROR] Unknown action. Use 'list', 'sign', or 'inspect'.", file=sys.stderr)
+        print("[ERROR] Unknown action. Use 'list', 'sign', 'verify', or 'inspect'.", file=sys.stderr)
         return 1
 
 def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
@@ -186,6 +205,7 @@ def cmd_proxy(args: argparse.Namespace) -> int:
             upstream_port=args.upstream_port,
             trust_store_path=args.trust_store,
             use_cache=not args.no_cache,
+            strict_shield=getattr(args, "strict_shield", False),
         )
         return 0
     except KeyboardInterrupt:
@@ -201,6 +221,27 @@ def cmd_sign(args: argparse.Namespace) -> int:
             print("[ERROR] No private key found. Run 'ztz init' or provide --key <path>.", file=sys.stderr)
             return 1
         signer = ZTZSigner(key_path)
+        if getattr(args, "recursive", False):
+            if not os.path.isdir(args.target):
+                print(f"[ERROR] --recursive requires a directory target: {args.target}", file=sys.stderr)
+                return 1
+            if args.out:
+                print("[ERROR] --out cannot be used with --recursive.", file=sys.stderr)
+                return 1
+            signed_count = 0
+            for root, _, files in os.walk(args.target):
+                for fname in sorted(files):
+                    if fname.endswith(".sig"):
+                        continue
+                    fpath = os.path.join(root, fname)
+                    out_sig = signer.sign_file(fpath)
+                    print(f"[SUCCESS] Signed: {fpath} -> {out_sig}")
+                    signed_count += 1
+            if signed_count == 0:
+                print(f"[WARN] No files found to sign in {args.target}")
+            else:
+                print(f"[SUCCESS] Signed {signed_count} file(s) recursively.")
+            return 0
         out_sig = signer.sign_file(args.target, output_sig_path=args.out)
         print(f"[SUCCESS] Detached signature generated: {out_sig}")
         return 0
@@ -382,6 +423,13 @@ def build_parser() -> argparse.ArgumentParser:
     models_insp_p.add_argument("--dir", default=None, help="Custom Ollama models directory")
     models_insp_p.add_argument("--json", action="store_true", help="Output report in JSON format")
 
+    models_ver_p = models_sub.add_parser("verify", help="Verify all layers of a model by tag name or path")
+    models_ver_p.add_argument("target", help="Model name (e.g. llama3:latest) or physical file path")
+    models_ver_p.add_argument("--dir", default=None, help="Custom Ollama models directory")
+    models_ver_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
+    models_ver_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    models_ver_p.add_argument("--json", action="store_true", help="Output verification result in JSON format")
+
     # Run subparser
     run_p = subparsers.add_parser("run", help="Run llama-cli / llama.cpp with pre-flight protection")
     _add_run_options(run_p)
@@ -393,13 +441,15 @@ def build_parser() -> argparse.ArgumentParser:
     proxy_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend")
     proxy_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
     proxy_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    proxy_p.add_argument("--strict-shield", action="store_true", help="Block requests when Context Shield detects secrets")
     proxy_p.add_argument("--log-file", default=None, help="Append all output to this file instead of the console")
 
     # Sign subparser
     sign_p = subparsers.add_parser("sign", help="Sign a model weight or context payload")
-    sign_p.add_argument("target", help="File to sign (e.g. model.gguf, context.txt)")
+    sign_p.add_argument("target", help="File (or directory with --recursive) to sign")
     sign_p.add_argument("--key", default=None, help="Path to private signing key (.pem, defaults to authority key)")
     sign_p.add_argument("--out", default=None, help="Output signature path (defaults to <target>.sig)")
+    sign_p.add_argument("--recursive", "-r", action="store_true", help="Recursively sign all non-.sig files in target directory")
 
     # Verify subparser
     ver_p = subparsers.add_parser("verify", help="Verify integrity of an asset against trust store")

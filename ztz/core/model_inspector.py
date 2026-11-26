@@ -127,7 +127,11 @@ class ModelFormatInspector:
         if cls._is_safetensors(file_path, file_size):
             return cls._inspect_safetensors(file_path, file_size)
 
-        # 3. Test for PyTorch / Pickle format
+        # 3. Test ONNX format
+        if name.lower().endswith(".onnx"):
+            return cls._inspect_onnx(file_path, file_size)
+
+        # 4. Test for PyTorch / Pickle format
         if name.lower().endswith((".pt", ".bin", ".pkl", ".ckpt")):
             return cls._inspect_pickle(file_path, file_size)
 
@@ -271,18 +275,34 @@ class ModelFormatInspector:
                         metadata["model_name"] = parsed_kv["general.name"]
                     if "general.file_type" in parsed_kv:
                         metadata["file_type"] = parsed_kv["general.file_type"]
+
+                    # Audit embedded Jinja2 chat templates for SSTI gadgets
+                    ssti_patterns = (
+                        "__class__", "__mro__", "__subclasses__", "__globals__",
+                        "__builtins__", "__import__", "cycler", "joiner", "lipsum",
+                    )
+                    for k, v in parsed_kv.items():
+                        if (k == "tokenizer.chat_template" or k.startswith("tokenizer.chat_template.")) and isinstance(v, str):
+                            lower_tpl = v.lower()
+                            hits = [p for p in ssti_patterns if p in lower_tpl]
+                            if hits:
+                                metadata["chat_template_risk"] = True
+                                warnings.append(
+                                    f"Suspicious Jinja2 SSTI gadget(s) in '{k}': {', '.join(hits)}"
+                                )
                 except Exception:
                     pass
 
+            has_ssti = bool(metadata.get("chat_template_risk"))
             return ModelInspectionReport(
                 file_path=file_path,
                 file_size_bytes=file_size,
                 format="GGUF",
-                is_safe_format=True,
+                is_safe_format=not has_ssti,
                 magic_bytes_valid=True,
                 metadata=metadata,
                 warnings=warnings,
-                risk_level="LOW" if not warnings else "MEDIUM"
+                risk_level="CRITICAL" if has_ssti else ("LOW" if not warnings else "MEDIUM")
             )
         except Exception as e:
             return ModelInspectionReport(
@@ -318,11 +338,39 @@ class ModelFormatInspector:
                 header = json.loads(header_json_bytes.decode("utf-8"))
 
             tensor_keys = [k for k in header.keys() if k != "__metadata__"]
+            payload_size = file_size - 8 - header_len
+            ranges = []
+            for k in tensor_keys:
+                entry = header.get(k)
+                if not isinstance(entry, dict) or "data_offsets" not in entry:
+                    raise ValueError(f"Tensor '{k}' missing data_offsets")
+                offsets = entry["data_offsets"]
+                if (
+                    not isinstance(offsets, list)
+                    or len(offsets) != 2
+                    or not all(isinstance(x, int) and not isinstance(x, bool) for x in offsets)
+                ):
+                    raise ValueError(f"Tensor '{k}' has invalid data_offsets")
+                begin, end = offsets
+                if begin < 0 or end < begin:
+                    raise ValueError(f"Tensor '{k}' data_offsets [{begin}, {end}] invalid")
+                if end > begin:
+                    ranges.append((begin, end, k))
+
+            ranges.sort(key=lambda r: (r[0], r[1]))
+            for i in range(1, len(ranges)):
+                if ranges[i][0] < ranges[i - 1][1]:
+                    raise ValueError(
+                        f"Overlapping tensor data_offsets between '{ranges[i - 1][2]}' and '{ranges[i][2]}'"
+                    )
+
             metadata = {
                 "header_size_bytes": header_len,
                 "tensor_count": len(tensor_keys),
-                "custom_metadata": header.get("__metadata__", {})
+                "custom_metadata": header.get("__metadata__", {}),
             }
+            if ranges and ranges[-1][1] > payload_size:
+                metadata["truncated_payload"] = True
 
             return ModelInspectionReport(
                 file_path=file_path,
@@ -343,6 +391,182 @@ class ModelFormatInspector:
                 magic_bytes_valid=False,
                 warnings=[f"Corrupt or tampered Safetensors JSON header: {e}"],
                 risk_level="CRITICAL"
+            )
+
+    @staticmethod
+    def _pb_read_varint(buf: memoryview, pos: int) -> tuple[int, int]:
+        val = 0
+        shift = 0
+        n = len(buf)
+        while pos < n:
+            b = buf[pos]
+            pos += 1
+            val |= (b & 0x7F) << shift
+            if not (b & 0x80):
+                return val, pos
+            shift += 7
+            if shift > 63:
+                raise ValueError("Protobuf varint overflow")
+        raise ValueError("Truncated protobuf varint")
+
+    @classmethod
+    def _pb_iter_fields(cls, buf: memoryview):
+        pos = 0
+        n = len(buf)
+        while pos < n:
+            tag, pos = cls._pb_read_varint(buf, pos)
+            field_num = tag >> 3
+            wire_type = tag & 0x07
+            if field_num == 0:
+                raise ValueError("Invalid protobuf field number 0")
+            if wire_type == 0:
+                val, pos = cls._pb_read_varint(buf, pos)
+                yield field_num, wire_type, val
+            elif wire_type == 1:
+                if pos + 8 > n:
+                    raise ValueError("Truncated 64-bit protobuf field")
+                yield field_num, wire_type, buf[pos:pos + 8]
+                pos += 8
+            elif wire_type == 2:
+                length, pos = cls._pb_read_varint(buf, pos)
+                if pos + length > n:
+                    raise ValueError("Truncated length-delimited protobuf field")
+                yield field_num, wire_type, buf[pos:pos + length]
+                pos += length
+            elif wire_type == 5:
+                if pos + 4 > n:
+                    raise ValueError("Truncated 32-bit protobuf field")
+                yield field_num, wire_type, buf[pos:pos + 4]
+                pos += 4
+            else:
+                raise ValueError(f"Unsupported protobuf wire type: {wire_type}")
+
+    @staticmethod
+    def _is_unsafe_external_path(loc: str) -> bool:
+        if not loc:
+            return False
+        norm = loc.replace("\\", "/")
+        if "://" in norm or norm.startswith("/") or (len(norm) > 1 and norm[1] == ":"):
+            return True
+        return any(part == ".." for part in norm.split("/"))
+
+    @classmethod
+    def _inspect_onnx(cls, file_path: str, file_size: int) -> ModelInspectionReport:
+        standard_domains = frozenset({"", "ai.onnx", "ai.onnx.ml", "ai.onnx.preview.training"})
+        warnings: List[str] = []
+        metadata: Dict[str, Any] = {}
+        custom_domains = set()
+        external_paths: List[str] = []
+        unsafe_paths: List[str] = []
+
+        if file_size > cls.MAX_PICKLE_SCAN_BYTES:
+            return ModelInspectionReport(
+                file_path=file_path,
+                file_size_bytes=file_size,
+                format="ONNX",
+                is_safe_format=True,
+                magic_bytes_valid=True,
+                metadata={"note": "Skipped deep protobuf scan (>256MB); relying on cryptographic signature."},
+                warnings=[],
+                risk_level="LOW",
+            )
+
+        try:
+            with open(file_path, "rb") as f:
+                data = f.read()
+            mv = memoryview(data)
+            opsets = []
+            node_count = 0
+            saw_model_field = False
+
+            for field_num, wire_type, val in cls._pb_iter_fields(mv):
+                if field_num == 1 and wire_type == 0:
+                    metadata["ir_version"] = val
+                    saw_model_field = True
+                elif field_num == 2 and wire_type == 2:
+                    metadata["producer_name"] = bytes(val).decode("utf-8", errors="replace")
+                    saw_model_field = True
+                elif field_num == 3 and wire_type == 2:
+                    metadata["producer_version"] = bytes(val).decode("utf-8", errors="replace")
+                    saw_model_field = True
+                elif field_num == 8 and wire_type == 2:
+                    saw_model_field = True
+                    dom, ver = "", 0
+                    for sub_f, sub_w, sub_v in cls._pb_iter_fields(val):
+                        if sub_f == 1 and sub_w == 2:
+                            dom = bytes(sub_v).decode("utf-8", errors="replace")
+                        elif sub_f == 2 and sub_w == 0:
+                            ver = sub_v
+                    opsets.append(f"{dom or 'ai.onnx'}:{ver}")
+                    if dom not in standard_domains:
+                        custom_domains.add(dom)
+                elif field_num == 7 and wire_type == 2:
+                    saw_model_field = True
+                    for gf, gw, gv in cls._pb_iter_fields(val):
+                        if gf == 1 and gw == 2:
+                            node_count += 1
+                            for nf, nw, nv in cls._pb_iter_fields(gv):
+                                if nf == 7 and nw == 2:
+                                    ndom = bytes(nv).decode("utf-8", errors="replace")
+                                    if ndom not in standard_domains:
+                                        custom_domains.add(ndom)
+                        elif gf == 5 and gw == 2:
+                            for tf, tw, tv in cls._pb_iter_fields(gv):
+                                if tf == 13 and tw == 2:
+                                    k_str, v_str = "", ""
+                                    for ef, ew, ev in cls._pb_iter_fields(tv):
+                                        if ef == 1 and ew == 2:
+                                            k_str = bytes(ev).decode("utf-8", errors="replace")
+                                        elif ef == 2 and ew == 2:
+                                            v_str = bytes(ev).decode("utf-8", errors="replace")
+                                    if k_str == "location" and v_str:
+                                        external_paths.append(v_str)
+                                        if cls._is_unsafe_external_path(v_str):
+                                            unsafe_paths.append(v_str)
+
+            if not saw_model_field:
+                raise ValueError("No valid ONNX ModelProto fields found")
+
+            if opsets:
+                metadata["opsets"] = opsets
+            metadata["node_count"] = node_count
+            if custom_domains:
+                metadata["custom_domains"] = sorted(custom_domains)
+                warnings.append(f"Non-standard ONNX operator domain(s): {', '.join(sorted(custom_domains))}")
+            if external_paths:
+                metadata["external_data_locations"] = external_paths
+            if unsafe_paths:
+                warnings.append(f"Unsafe external_data path traversal detected: {', '.join(unsafe_paths)}")
+                return ModelInspectionReport(
+                    file_path=file_path,
+                    file_size_bytes=file_size,
+                    format="ONNX",
+                    is_safe_format=False,
+                    magic_bytes_valid=True,
+                    metadata=metadata,
+                    warnings=warnings,
+                    risk_level="CRITICAL",
+                )
+
+            return ModelInspectionReport(
+                file_path=file_path,
+                file_size_bytes=file_size,
+                format="ONNX",
+                is_safe_format=True,
+                magic_bytes_valid=True,
+                metadata=metadata,
+                warnings=warnings,
+                risk_level="MEDIUM" if warnings else "LOW",
+            )
+        except Exception as e:
+            return ModelInspectionReport(
+                file_path=file_path,
+                file_size_bytes=file_size,
+                format="ONNX",
+                is_safe_format=True,
+                magic_bytes_valid=False,
+                warnings=[f"Could not parse ONNX protobuf ({e}); relying on cryptographic signature."],
+                risk_level="MEDIUM",
             )
 
     @classmethod

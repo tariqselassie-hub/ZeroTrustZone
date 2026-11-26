@@ -54,11 +54,22 @@ ztz models sign llama3.2
 ```
 
 #### `ztz models inspect <model_name>`
-Resolves a model tag to disk and performs structural bytecode inspection for GGUF metadata (including architecture, parameter count, context length, embedding dimensions, layer counts, and attention heads), Safetensors headers, or dangerous PyTorch pickle opcodes. Direct $O(1)$ manifest lookup resolves models instantly without auditing unrelated inventory.
+Resolves a model tag to disk and performs structural bytecode inspection for GGUF metadata (including architecture, parameter count, context length, embedding dimensions, layer counts, attention heads, and `tokenizer.chat_template` SSTI hazards), Safetensors headers/tensor bounds, ONNX protobuf graphs/external data paths, or dangerous PyTorch pickle opcodes. Direct $O(1)$ manifest lookup resolves models instantly without auditing unrelated inventory.
 - `--json`: Output inspection report in JSON format.
 
 ```bash
 ztz models inspect llama3.2
+```
+
+#### `ztz models verify <model_name>`
+Resolves a model tag or file path and verifies every layer Ollama loads (weights, vision projector, adapters) against the trust store.
+- `--dir`: Optional custom Ollama models directory.
+- `--trust-store`: Directory containing trusted public keys.
+- `--no-cache`: Bypass the instant attestation cache.
+- `--json`: Output verification result in JSON format.
+
+```bash
+ztz models verify llama3.2
 ```
 
 ---
@@ -66,10 +77,12 @@ ztz models inspect llama3.2
 ### `ztz sign <file>`
 Generates a detached cryptographic signature (`<file>.sig`) for any model weight or context document.
 - `--key`: Path to private PEM key (defaults to initialized Root Authority key if omitted).
-- `--out`: Custom output path for the signature.
+- `--out`: Custom output path for the signature (cannot be combined with `--recursive`).
+- `--recursive`, `-r`: Recursively sign all non-`.sig` files inside a target directory.
 
 ```bash
 ztz sign models/qwen2.5-7b.gguf
+ztz sign --recursive models/qwen2.5-shards/
 ```
 
 ---
@@ -109,6 +122,7 @@ Starts the Zero-Trust Reverse Proxy Interceptor in front of Ollama (Ollama API o
 - `--upstream-port`: Real backend daemon port (default: `11435`).
 - `--trust-store`: Public key directory (cascades to `~/.ztz/keys`).
 - `--no-cache`: Bypass the attestation cache.
+- `--strict-shield`: Block requests (HTTP `403`) instead of forwarding redacted prompts when Context Shield detects secrets (also enabled via `ZTZ_STRICT_SHIELD=1`).
 - `--log-file`: Append all output to this file instead of the console.
 - Attests every request that would load a model: `/api/generate`, `/api/chat`, `/api/embed`, `/v1/*`, and any other POST naming a `model`. Management calls (`/api/show`, `/api/pull`, `/api/push`, `/api/delete`, `/api/copy`, `/api/create`) pass untouched.
 - Resolves a model's files by asking the backend (`/api/show`): weights, vision projector and LoRA adapters are all attested. Unknown models, an unreachable backend, and models with no local files (cloud models) are refused.
