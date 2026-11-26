@@ -72,6 +72,16 @@ Resolves a model tag or file path and verifies every layer Ollama loads (weights
 ztz models verify llama3.2
 ```
 
+#### `ztz models unsign <model_name>`
+Deletes detached `.sig` files for a model tag or file path.
+- `--dir`: Optional custom Ollama models directory.
+- `--dry-run`: Preview `.sig` files that would be removed.
+- `--json`: Output result in JSON format.
+
+```bash
+ztz models unsign llama3.2
+```
+
 ---
 
 ### `ztz sign <file>`
@@ -136,7 +146,7 @@ ztz proxy --port 11434 --upstream-port 11435
 
 ---
 
-### `ztz service install | uninstall | status`
+### `ztz service install | update | uninstall | status`
 Runs `ztz proxy` as a per-user background service that starts at login and restarts on failure. No admin rights are needed:
 
 | Platform | Mechanism | Definition file |
@@ -196,3 +206,33 @@ Purges the instant hardware-bound SQLite attestation cache.
 ```bash
 ztz cache clear
 ```
+
+---
+
+### `ztz install`
+Initializes `~/.ztz`, stamps installation metadata in `~/.ztz/config.json`, and optionally installs the background proxy service.
+- `--force`: Force re-generation of keys and config.
+- `--type`: Key algorithm (`ed25519` or `rsa`, default: `ed25519`).
+- `--with-service`: Also install and start `ztz service`.
+- `--strict-shield`: Enable `--strict-shield` on the installed service.
+- `--dry-run`: Preview installation steps without modifying disk.
+- `--json`: Output result in JSON format.
+
+---
+
+### `ztz update`
+Updates ZeroTrustZone (via `git pull --ff-only && pip install -e . --no-deps` for editable checkouts, or `pip install --upgrade ztz`), refreshes `~/.ztz/config.json` metadata, and restarts the background proxy service if installed.
+- `--check`: Show current version and update commands without applying.
+- `--dry-run`: Preview update commands without applying.
+- `--no-restart`: Skip refreshing/restarting the background service.
+- `--json`: Output result in JSON format.
+
+---
+
+### `ztz uninstall`
+Stops and removes the background proxy service (if installed) and deletes `~/.ztz` state (`config.json`, `logs/`, `service/`, and `cache.db*`). Authority keys in `~/.ztz/keys` are preserved by default so existing `.sig` files are not orphaned.
+- `--purge-keys`: Also delete `~/.ztz/keys` (requires `--yes`).
+- `--keep-cache`: Preserve `~/.ztz/cache.db`.
+- `--yes`, `-y`: Confirm destructive key purge.
+- `--dry-run`: Preview files and services that would be removed.
+- `--json`: Output result in JSON format.

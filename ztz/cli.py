@@ -176,8 +176,31 @@ def cmd_models(args: argparse.Namespace) -> int:
                 failed = next((r for r in rows if r["status"] not in ("VERIFIED", "VERIFIED_CACHE")), rows[0])
                 print_lockdown_banner(failed["full_path"], reason=f"{failed['status']}: {failed['error']}")
         return 0 if all_clean else 1
+    elif action == "unsign":
+        target_info = resolve_model_target(args.target, args.dir)
+        if not target_info:
+            print(f"[ERROR] Model not found: {args.target}", file=sys.stderr)
+            return 1
+        blob_paths = target_info.get("blob_paths") or [target_info["blob_path"]]
+        removed = []
+        for p in blob_paths:
+            sig = f"{p}.sig"
+            if os.path.exists(sig):
+                if not getattr(args, "dry_run", False):
+                    os.remove(sig)
+                removed.append(sig)
+        if getattr(args, "json", False):
+            print(json.dumps({"model": target_info.get("name", args.target), "removed_sigs": removed, "dry_run": getattr(args, "dry_run", False)}, indent=2))
+        else:
+            if not removed:
+                print(f"[ZTZ] No detached .sig files found for '{target_info.get('name', args.target)}'.")
+            else:
+                prefix = "[DRY-RUN] Would remove" if getattr(args, "dry_run", False) else "[SUCCESS] Removed"
+                for sig in removed:
+                    print(f"{prefix}: {sig}")
+        return 0
     else:
-        print("[ERROR] Unknown action. Use 'list', 'sign', 'verify', or 'inspect'.", file=sys.stderr)
+        print("[ERROR] Unknown action. Use 'list', 'sign', 'verify', 'unsign', or 'inspect'.", file=sys.stderr)
         return 1
 
 def cmd_run(args: argparse.Namespace, passthrough: List[str]) -> int:
@@ -307,20 +330,108 @@ def cmd_cache(args: argparse.Namespace) -> int:
 def cmd_service(args: argparse.Namespace) -> int:
     from ztz.runners import service
     try:
-        if args.action == "install":
+        if args.action in ("install", "update"):
             cfg = service.ServiceConfig(
                 host=args.host,
                 port=args.port,
                 upstream_port=args.upstream_port,
                 trust_store=args.trust_store,
                 no_cache=args.no_cache,
+                strict_shield=getattr(args, "strict_shield", False),
             )
-            return service.install(cfg, start=not args.no_start, dry_run=args.dry_run)
+            fn = service.install if args.action == "install" else service.update
+            return fn(cfg, start=not args.no_start, dry_run=args.dry_run)
         if args.action == "uninstall":
             return service.uninstall()
         return service.status()
     except (OSError, ValueError) as e:
         print(f"[ERROR] ztz service {args.action} failed: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    from ztz.core.lifecycle import install_system
+    from ztz.runners import service
+    try:
+        svc_cfg = service.ServiceConfig(strict_shield=getattr(args, "strict_shield", False))
+        res = install_system(
+            force=args.force,
+            key_type=args.type,
+            with_service=args.with_service,
+            service_cfg=svc_cfg,
+            dry_run=args.dry_run,
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+        else:
+            if args.dry_run:
+                print(f"[DRY-RUN] Would install ZTZ v{res['version']} ({res['install_mode']}) into {res['home_dir']}")
+            else:
+                print(f"[SUCCESS] ZeroTrustZone v{res['version']} installed ({res['install_mode']}).")
+                print(f"  Home / Keys : {res['home_dir']} | {res['keys_dir']}")
+                if args.with_service:
+                    print(f"  Service     : {'active' if res.get('service_installed') else 'failed'}")
+        return 0
+    except Exception as e:
+        print(f"[ERROR] Install failed: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    from ztz.core.lifecycle import update_system
+    try:
+        res = update_system(
+            check_only=args.check,
+            dry_run=args.dry_run,
+            restart_service=not args.no_restart,
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+        elif args.check or args.dry_run:
+            label = "[CHECK]" if args.check else "[DRY-RUN]"
+            print(f"{label} Current version: {res['current_version']} ({res['install_mode']})")
+            for cmd in res["commands"]:
+                print(f"  Command: {cmd}")
+        else:
+            print(f"[SUCCESS] ZeroTrustZone updated ({res['previous_version']} -> {res['current_version']}).")
+            if res.get("service_updated"):
+                print("  Background proxy service refreshed.")
+        return 0
+    except Exception as e:
+        print(f"[ERROR] Update failed: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    from ztz.core.lifecycle import uninstall_system
+    if args.purge_keys and not args.yes and not args.dry_run:
+        print("[ERROR] --purge-keys deletes your authority keys and orphans existing .sig files. Pass --yes to confirm.", file=sys.stderr)
+        return 1
+    try:
+        res = uninstall_system(
+            purge_keys=args.purge_keys,
+            keep_cache=args.keep_cache,
+            dry_run=args.dry_run,
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+        elif args.dry_run:
+            print("[DRY-RUN] Uninstall plan:")
+            if res["service_will_remove"]:
+                print(f"  Would remove service: {res['service_file']}")
+            for p in res["paths_to_delete"]:
+                print(f"  Would delete: {p}")
+            if res["keys_preserved"]:
+                print("  Authority keys would be preserved (pass --purge-keys to remove).")
+        else:
+            print("[SUCCESS] ZeroTrustZone uninstalled.")
+            for p in res["deleted"]:
+                print(f"  Removed: {p}")
+            if res["keys_preserved"]:
+                print("  Authority keys preserved in ~/.ztz/keys (pass --purge-keys --yes to remove).")
+        return 0
+    except Exception as e:
+        print(f"[ERROR] Uninstall failed: {e}", file=sys.stderr)
         return 1
 
 def cmd_inspect_model(args: argparse.Namespace) -> int:
@@ -430,6 +541,12 @@ def build_parser() -> argparse.ArgumentParser:
     models_ver_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
     models_ver_p.add_argument("--json", action="store_true", help="Output verification result in JSON format")
 
+    models_unsign_p = models_sub.add_parser("unsign", help="Delete detached .sig files for a model by tag name or path")
+    models_unsign_p.add_argument("target", help="Model name (e.g. llama3:latest) or physical file path")
+    models_unsign_p.add_argument("--dir", default=None, help="Custom Ollama models directory")
+    models_unsign_p.add_argument("--dry-run", action="store_true", help="Preview signatures that would be deleted")
+    models_unsign_p.add_argument("--json", action="store_true", help="Output result in JSON format")
+
     # Run subparser
     run_p = subparsers.add_parser("run", help="Run llama-cli / llama.cpp with pre-flight protection")
     _add_run_options(run_p)
@@ -475,14 +592,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Service subparser
     svc_p = subparsers.add_parser("service", help="Run the ZTZ proxy as a per-user background service")
-    svc_p.add_argument("action", choices=["install", "uninstall", "status"], help="Action to perform")
+    svc_p.add_argument("action", choices=["install", "update", "uninstall", "status"], help="Action to perform")
     svc_p.add_argument("--host", default="127.0.0.1", help="Host for the proxy to bind")
     svc_p.add_argument("--port", type=int, default=11434, help="Port the proxy listens on (default 11434)")
     svc_p.add_argument("--upstream-port", type=int, default=11435, help="Port of the real backend (default 11435)")
     svc_p.add_argument("--trust-store", default=None, help="Directory containing trusted public keys")
     svc_p.add_argument("--no-cache", action="store_true", help="Bypass the instant attestation cache")
+    svc_p.add_argument("--strict-shield", action="store_true", help="Block requests when Context Shield detects secrets")
     svc_p.add_argument("--no-start", action="store_true", help="Install without starting it now")
     svc_p.add_argument("--dry-run", action="store_true", help="Print the service definition and commands only")
+
+    # Install / Update / Uninstall subparsers
+    inst_p = subparsers.add_parser("install", help="Initialize ZTZ environment, record install metadata, and optionally install the proxy service")
+    inst_p.add_argument("--force", action="store_true", help="Force re-generation of keys and config")
+    inst_p.add_argument("--type", choices=["ed25519", "rsa"], default="ed25519", help="Key algorithm (default: ed25519)")
+    inst_p.add_argument("--with-service", action="store_true", help="Also install and start the background proxy service")
+    inst_p.add_argument("--strict-shield", action="store_true", help="Enable strict Context Shield on the installed service")
+    inst_p.add_argument("--dry-run", action="store_true", help="Preview installation steps without modifying disk")
+    inst_p.add_argument("--json", action="store_true", help="Output result in JSON format")
+
+    upd_p = subparsers.add_parser("update", help="Update ZeroTrustZone package, config metadata, and background service")
+    upd_p.add_argument("--check", action="store_true", help="Show current version and update commands without applying")
+    upd_p.add_argument("--dry-run", action="store_true", help="Preview update commands without applying")
+    upd_p.add_argument("--no-restart", action="store_true", help="Do not refresh/restart the background service")
+    upd_p.add_argument("--json", action="store_true", help="Output result in JSON format")
+
+    uninst_p = subparsers.add_parser("uninstall", help="Remove ZTZ background service, cache, logs, and config")
+    uninst_p.add_argument("--purge-keys", action="store_true", help="Also delete ~/.ztz/keys (requires --yes)")
+    uninst_p.add_argument("--keep-cache", action="store_true", help="Preserve ~/.ztz/cache.db")
+    uninst_p.add_argument("--yes", "-y", action="store_true", help="Confirm destructive key purge")
+    uninst_p.add_argument("--dry-run", action="store_true", help="Preview files and services that would be removed")
+    uninst_p.add_argument("--json", action="store_true", help="Output result in JSON format")
 
     # Inspect-model subparser
     inspect_p = subparsers.add_parser("inspect-model", help="Inspect GGUF / Safetensors / PyTorch weights for structural safety & bytecode risks")
@@ -534,6 +674,9 @@ def main():
             "fingerprint": cmd_fingerprint,
             "cache": cmd_cache,
             "service": cmd_service,
+            "install": cmd_install,
+            "update": cmd_update,
+            "uninstall": cmd_uninstall,
             "inspect-model": cmd_inspect_model,
             "context-scan": cmd_context_scan,
         }

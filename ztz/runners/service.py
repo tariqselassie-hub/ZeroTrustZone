@@ -41,6 +41,7 @@ class ServiceConfig:
     upstream_port: int = 11435
     trust_store: Optional[str] = None
     no_cache: bool = False
+    strict_shield: bool = False
     log_file: str = field(default_factory=lambda: os.path.normpath(os.path.expanduser("~/.ztz/logs/proxy.log")))
 
     def proxy_args(self) -> List[str]:
@@ -51,6 +52,8 @@ class ServiceConfig:
             args += ["--trust-store", os.path.abspath(self.trust_store)]
         if self.no_cache:
             args.append("--no-cache")
+        if self.strict_shield:
+            args.append("--strict-shield")
         return args
 
 
@@ -256,3 +259,15 @@ def status(platform: Optional[str] = None, runner: Runner = _run) -> int:
     except FileNotFoundError:
         print(f"[ERROR] '{status_command(platform)[0]}' not found.", file=sys.stderr)
         return 1
+
+
+def update(cfg: ServiceConfig, platform: Optional[str] = None, start: bool = True,
+           dry_run: bool = False, runner: Runner = _run) -> int:
+    """Re-renders the service definition and restarts the background proxy service."""
+    platform = platform or current_platform()
+    if platform == "windows" and not dry_run:
+        _run_all([["schtasks", "/End", "/TN", TASK_NAME]], runner)
+    rc = install(cfg, platform=platform, start=start, dry_run=dry_run, runner=runner)
+    if rc == 0 and platform == "linux" and start and not dry_run:
+        rc = _run_all([["systemctl", "--user", "restart", UNIT_NAME]], runner)
+    return rc
